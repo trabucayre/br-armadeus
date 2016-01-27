@@ -1,0 +1,136 @@
+From 42b8a3fc4d7c9b401a6b6d1d30e654b7d480fd90 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Tue, 1 Sep 2015 18:14:43 -0700
+Subject: [PATCH 661/668] media: imx6 camera: set buffer error on pending
+ restarts
+
+Add a pending_restart flag that is set when starting the stream
+restart timer, to indicate a restart is pending. The streaming
+subdevs (mx6-encode and mx6-vdic) set the VB2_BUF_STATE_ERROR
+flag on completed vb2_buffers when the pending_restart flag is
+set (in addition to !signal_locked flag). Userland can use the
+error flag (translated to V4L2_BUF_FLAG_ERROR) as an indication
+that images might be unstable during this period, and may want
+to discard them.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c  | 26 +++++++++++++++++++------
+ drivers/staging/media/imx6/capture/mx6-camif.h  |  1 +
+ drivers/staging/media/imx6/capture/mx6-encode.c |  3 ++-
+ drivers/staging/media/imx6/capture/mx6-vdic.c   |  3 ++-
+ 4 files changed, 25 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index d87ea4d..5d63384 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -667,6 +667,8 @@ static int start_preview(struct mx6cam_dev *dev)
+ 			  dev->signal_locked ? "signal locked" : "no signal");
+ 	}
+ 
++	atomic_set(&dev->pending_restart, 0);
++
+ 	/* preview stream on */
+ 	ret = v4l2_subdev_call(dev->preview_sd, video, s_stream, 1);
+ 	if (ret)
+@@ -712,6 +714,8 @@ static int set_stream(struct mx6cam_ctx *ctx, bool on)
+ 				  "signal locked" : "no signal");
+ 		}
+ 
++		atomic_set(&dev->pending_restart, 0);
++
+ 		dev->using_ic =
+ 			(need_ic(dev, &dev->sensor_fmt, &dev->user_fmt,
+ 				 &dev->crop) &&
+@@ -818,6 +822,19 @@ static void mx6cam_restart_timeout(unsigned long data)
+ 	schedule_work(&ctx->restart_work);
+ }
+ 
++/*
++ * bump the restart timer and set the pending restart flag.
++ * notify_lock must be held when calling.
++ */
++static void mx6cam_bump_restart_timer(struct mx6cam_ctx *ctx)
++{
++	struct mx6cam_dev *dev = ctx->dev;
++
++	mod_timer(&ctx->restart_timer, jiffies +
++		  msecs_to_jiffies(MX6CAM_RESTART_DELAY));
++	atomic_set(&dev->pending_restart, 1);
++}
++
+ /* Controls */
+ static int mx6cam_set_rotation(struct mx6cam_dev *dev,
+ 			       int rotation, bool hflip, bool vflip)
+@@ -1449,8 +1466,7 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int index)
+ 	 */
+ 	if (is_io_ctx(ctx) && !ctx->stop) {
+ 		spin_lock_irqsave(&dev->notify_lock, flags);
+-		mod_timer(&ctx->restart_timer,
+-			  jiffies + msecs_to_jiffies(MX6CAM_RESTART_DELAY));
++		mx6cam_bump_restart_timer(ctx);
+ 		spin_unlock_irqrestore(&dev->notify_lock, flags);
+ 	}
+ 
+@@ -2177,15 +2193,13 @@ static void mx6cam_subdev_notification(struct v4l2_subdev *sd,
+ 	case MX6CAM_NFB4EOF_NOTIFY:
+ 	case MX6CAM_FRAME_INTERVAL_NOTIFY:
+ 		if (ctx && !ctx->stop)
+-			mod_timer(&ctx->restart_timer, jiffies +
+-				  msecs_to_jiffies(MX6CAM_RESTART_DELAY));
++			mx6cam_bump_restart_timer(ctx);
+ 		break;
+ 	case DECODER_STATUS_CHANGE_NOTIFY:
+ 		atomic_set(&dev->status_change, 1);
+ 		if (ctx && !ctx->stop) {
+ 			v4l2_warn(&dev->v4l2_dev, "decoder status change\n");
+-			mod_timer(&ctx->restart_timer, jiffies +
+-				  msecs_to_jiffies(MX6CAM_RESTART_DELAY));
++			mx6cam_bump_restart_timer(ctx);
+ 		}
+ 		break;
+ 	case MX6CAM_EOF_TIMEOUT_NOTIFY:
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.h b/drivers/staging/media/imx6/capture/mx6-camif.h
+index 01faab7..5d3e0c8 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.h
++++ b/drivers/staging/media/imx6/capture/mx6-camif.h
+@@ -182,6 +182,7 @@ struct mx6cam_dev {
+ 	int                     current_input; /* the current input */
+ 	v4l2_std_id             current_std;   /* current video standard */
+ 	atomic_t                status_change; /* sensor status change */
++	atomic_t                pending_restart; /* a restart is pending */
+ 	bool                    signal_locked; /* sensor signal lock */
+ 	bool                    encoder_on;    /* encode is on */
+ 	bool                    preview_on;    /* preview is on */
+diff --git a/drivers/staging/media/imx6/capture/mx6-encode.c b/drivers/staging/media/imx6/capture/mx6-encode.c
+index 2b346ba..e96794e 100644
+--- a/drivers/staging/media/imx6/capture/mx6-encode.c
++++ b/drivers/staging/media/imx6/capture/mx6-encode.c
+@@ -172,7 +172,8 @@ static irqreturn_t encoder_eof_interrupt(int irq, void *dev_id)
+ 	frame = priv->active_frame[priv->buf_num];
+ 	if (frame) {
+ 		frame->vb.v4l2_buf.timestamp = cur_time;
+-		state = dev->signal_locked ?
++		state = (dev->signal_locked &&
++			 !atomic_read(&dev->pending_restart)) ?
+ 			VB2_BUF_STATE_DONE : VB2_BUF_STATE_ERROR;
+ 		vb2_buffer_done(&frame->vb, state);
+ 	}
+diff --git a/drivers/staging/media/imx6/capture/mx6-vdic.c b/drivers/staging/media/imx6/capture/mx6-vdic.c
+index 15d76d4..edf170f 100644
+--- a/drivers/staging/media/imx6/capture/mx6-vdic.c
++++ b/drivers/staging/media/imx6/capture/mx6-vdic.c
+@@ -337,7 +337,8 @@ static irqreturn_t prpvf_out_eof_interrupt(int irq, void *dev_id)
+ 	frame = priv->active_frame[priv->out_buf_num];
+ 	if (frame) {
+ 		frame->vb.v4l2_buf.timestamp = cur_time;
+-		state = dev->signal_locked ?
++		state = (dev->signal_locked &&
++			 !atomic_read(&dev->pending_restart)) ?
+ 			VB2_BUF_STATE_DONE : VB2_BUF_STATE_ERROR;
+ 		vb2_buffer_done(&frame->vb, state);
+ 	}
+-- 
+2.4.10
+

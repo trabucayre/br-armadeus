@@ -1,0 +1,31 @@
+From f218b688c2f65af2b921c1418d6b7db619da5550 Mon Sep 17 00:00:00 2001
+From: Carsten Resch <Carsten.Resch@de.bosch.com>
+Date: Tue, 14 Apr 2015 15:07:12 +0200
+Subject: [PATCH 636/668] media: imx6 camera: Increase the maximum width
+
+The tv_fpga sensor driver for the iCAM project has a resolution of 5120x960.
+Increase the configuration to the max width according to IPU chapter in
+imx6 reference manual, which is 8192.
+
+Change-Id: Ib3e70cffdaff66b9e22fd8aa223a422ca702a6e8
+Signed-off-by: Carsten Resch <Carsten.Resch@de.bosch.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index 5ca4dda..a50757c 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -35,7 +35,7 @@
+  */
+ #define MIN_W       176
+ #define MIN_H       144
+-#define MAX_W      4096
++#define MAX_W      8192
+ #define MAX_H      4096
+ #define MAX_W_IC   1024
+ #define MAX_H_IC   1024
+-- 
+2.4.10
+

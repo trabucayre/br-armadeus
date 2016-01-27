@@ -1,0 +1,64 @@
+From b7ce03c9587b8ca2358f4daeb180aab68da83f15 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Fri, 13 Mar 2015 15:47:24 -0700
+Subject: [PATCH 626/668] media: imx6 camera: reset crop using defrect
+
+There's no need to call calc_default_crop() to reset the
+active crop window. We can just copy the default rectangle which
+does the same thing.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c | 14 ++++++--------
+ 1 file changed, 6 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index 23d03e8..5ca4dda 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -511,8 +511,7 @@ static int start_preview(struct mx6cam_dev *dev)
+ 		update_signal_lock_status(dev);
+ 		update_sensor_std(dev);
+ 		update_sensor_fmt(dev);
+-		/* reset active crop window */
+-		calc_default_crop(dev, &dev->crop, &dev->sensor_fmt);
++		dev->crop = dev->crop_defrect; /* reset crop to default */
+ 		atomic_set(&dev->status_change, 0);
+ 		v4l2_info(&dev->v4l2_dev, "at preview on: %s, %s\n",
+ 			  v4l2_norm_to_name(dev->current_std),
+@@ -555,8 +554,8 @@ static int set_stream(struct mx6cam_ctx *ctx, bool on)
+ 			update_signal_lock_status(dev);
+ 			update_sensor_std(dev);
+ 			update_sensor_fmt(dev);
+-			/* reset active crop window */
+-			calc_default_crop(dev, &dev->crop, &dev->sensor_fmt);
++			/* reset crop to default */
++			dev->crop = dev->crop_defrect;
+ 			atomic_set(&dev->status_change, 0);
+ 			v4l2_info(&dev->v4l2_dev, "at stream on: %s, %s\n",
+ 				  v4l2_norm_to_name(dev->current_std),
+@@ -971,8 +970,7 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
+ 	if (ret)
+ 		return ret;
+ 
+-	/* reset active crop window */
+-	calc_default_crop(dev, &dev->crop, &dev->sensor_fmt);
++	dev->crop = dev->crop_defrect; /* reset crop to default */
+ 
+ 	dev->user_fmt = *f;
+ 	dev->user_pixfmt = mx6cam_get_format(f->fmt.pix.pixelformat, 0);
+@@ -1750,9 +1748,9 @@ static int mx6cam_open(struct file *file)
+ 
+ 	/* update the sensor's current format */
+ 	update_sensor_fmt(dev);
+-	/* and init crop window if needed */
++	/* and init crop window to default if needed */
+ 	if (!dev->crop.width || !dev->crop.height)
+-		calc_default_crop(dev, &dev->crop, &dev->sensor_fmt);
++		dev->crop = dev->crop_defrect;
+ 
+ 	mutex_unlock(&dev->mutex);
+ 	return 0;
+-- 
+2.4.10
+

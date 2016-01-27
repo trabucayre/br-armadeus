@@ -1,0 +1,36 @@
+From 15adee5cd02cbd91093da3b1bf936a259b2bf54d Mon Sep 17 00:00:00 2001
+From: Vladimir Zapolskiy <vladimir_zapolskiy@mentor.com>
+Date: Thu, 1 Oct 2015 16:37:29 +0300
+Subject: [PATCH 666/668] media: imx6 capture: preview: check return value of
+ v4l2_ctrl_handler_setup()
+
+Don't forget to check return value of v4l2_ctrl_handler_setup() and
+in case of an error free registered V4L2 controls. Note, hdlr->error
+in this case may be not set accordingly.
+
+Signed-off-by: Vladimir Zapolskiy <vladimir_zapolskiy@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-preview.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-preview.c b/drivers/staging/media/imx6/capture/mx6-preview.c
+index 7fa4f27..91a21b2 100644
+--- a/drivers/staging/media/imx6/capture/mx6-preview.c
++++ b/drivers/staging/media/imx6/capture/mx6-preview.c
+@@ -743,9 +743,11 @@ static int preview_setup_controls(struct preview_priv *priv)
+ 		return ret;
+ 	}
+ 
+-	v4l2_ctrl_handler_setup(hdlr);
++	ret = v4l2_ctrl_handler_setup(hdlr);
++	if (ret)
++		v4l2_ctrl_handler_free(hdlr);
+ 
+-	return 0;
++	return ret;
+ }
+ 
+ static struct v4l2_subdev_core_ops preview_core_ops = {
+-- 
+2.4.10
+

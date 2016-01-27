@@ -1,0 +1,95 @@
+From c6d0be6e2156c41d1311f5737133711d266740cb Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Mon, 28 Sep 2015 14:58:21 -0700
+Subject: [PATCH 663/668] media: imx6 camera: move init_completion() to stream
+ start
+
+In the streaming subdevs, the init of the EOF completion waitqueue
+should be moved to the stream start functions. Previously this was
+being done just after setting ->last_eof, but that could be too
+late, the EOF irq handler could see the flag and try to complete
+the waitq before it has been initialized.
+
+Also the ->last_eof flag should be reset in the stream start
+functions, in case at stream stop there was an EOF timeout (no
+EOF irq so the handler would not have reset the flag).
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-encode.c  | 5 ++++-
+ drivers/staging/media/imx6/capture/mx6-preview.c | 5 ++++-
+ drivers/staging/media/imx6/capture/mx6-vdic.c    | 5 ++++-
+ 3 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-encode.c b/drivers/staging/media/imx6/capture/mx6-encode.c
+index 113326b..9aea4aa 100644
+--- a/drivers/staging/media/imx6/capture/mx6-encode.c
++++ b/drivers/staging/media/imx6/capture/mx6-encode.c
+@@ -563,6 +563,10 @@ static int encoder_start(struct encoder_priv *priv)
+ 
+ 	priv->buf_num = 0;
+ 
++	/* init EOF completion waitq */
++	init_completion(&priv->last_eof_comp);
++	priv->last_eof = false;
++
+ 	if (dev->using_ic) {
+ 		/* set IC to receive from CSI */
+ 		ipu_ic_set_src(priv->ic_enc, csi_id, false);
+@@ -641,7 +645,6 @@ static int encoder_stop(struct encoder_priv *priv)
+ 	/*
+ 	 * and then wait for interrupt handler to mark completion.
+ 	 */
+-	init_completion(&priv->last_eof_comp);
+ 	ret = wait_for_completion_timeout(&priv->last_eof_comp,
+ 					  msecs_to_jiffies(MX6CAM_EOF_TIMEOUT));
+ 	if (ret == 0)
+diff --git a/drivers/staging/media/imx6/capture/mx6-preview.c b/drivers/staging/media/imx6/capture/mx6-preview.c
+index aed1977..7fa4f27 100644
+--- a/drivers/staging/media/imx6/capture/mx6-preview.c
++++ b/drivers/staging/media/imx6/capture/mx6-preview.c
+@@ -508,6 +508,10 @@ static int preview_start(struct preview_priv *priv)
+ 			       dev->fbuf_pixfmt->bpp) >> 3;
+ 	priv->out_cs = ipu_pixelformat_to_colorspace(outf->pix.pixelformat);
+ 
++	/* init EOF completion waitq */
++	init_completion(&priv->last_eof_comp);
++	priv->last_eof = false;
++
+ 	err = preview_get_ipu_resources(priv);
+ 	if (err)
+ 		return err;
+@@ -599,7 +603,6 @@ static int preview_stop(struct preview_priv *priv)
+ 	/*
+ 	 * and then wait for interrupt handler to mark completion.
+ 	 */
+-	init_completion(&priv->last_eof_comp);
+ 	ret = wait_for_completion_timeout(&priv->last_eof_comp,
+ 					  msecs_to_jiffies(MX6CAM_EOF_TIMEOUT));
+ 	if (ret == 0)
+diff --git a/drivers/staging/media/imx6/capture/mx6-vdic.c b/drivers/staging/media/imx6/capture/mx6-vdic.c
+index 3c7cf38..f0740c0 100644
+--- a/drivers/staging/media/imx6/capture/mx6-vdic.c
++++ b/drivers/staging/media/imx6/capture/mx6-vdic.c
+@@ -809,6 +809,10 @@ static int vdic_start(struct vdic_priv *priv)
+ 		goto out_put_ipu;
+ 	}
+ 
++	/* init EOF completion waitq */
++	init_completion(&priv->last_eof_comp);
++	priv->last_eof = false;
++
+ 	/* request EOF irq for prpvf out channel */
+ 	priv->out_eof_irq = ipu_idmac_channel_irq(dev->ipu,
+ 						  priv->prpvf_out_ch,
+@@ -908,7 +912,6 @@ static int vdic_stop(struct vdic_priv *priv)
+ 	/*
+ 	 * and then wait for interrupt handler to mark completion.
+ 	 */
+-	init_completion(&priv->last_eof_comp);
+ 	ret = wait_for_completion_timeout(&priv->last_eof_comp,
+ 					  msecs_to_jiffies(MX6CAM_EOF_TIMEOUT));
+ 	if (ret == 0)
+-- 
+2.4.10
+

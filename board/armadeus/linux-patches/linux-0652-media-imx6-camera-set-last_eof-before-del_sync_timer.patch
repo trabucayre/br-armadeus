@@ -1,0 +1,139 @@
+From 7466b36e28ae119df7ef9e128fcfa02bd6ddb72a Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Thu, 13 Aug 2015 14:48:23 -0700
+Subject: [PATCH 652/668] media: imx6 camera: set last_eof before
+ del_sync_timer at stop
+
+In the streaming and preview subdevs, on stream stop, set the last_eof
+flag before calling del_sync_timer(), and with irqlock held, to ensure
+the EOF timeout timer doesn't get started again.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-encode.c  | 11 ++++++++---
+ drivers/staging/media/imx6/capture/mx6-preview.c | 19 +++++++++++++++----
+ drivers/staging/media/imx6/capture/mx6-vdic.c    | 11 ++++++++---
+ 3 files changed, 31 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-encode.c b/drivers/staging/media/imx6/capture/mx6-encode.c
+index e347fb2..40c2f83 100644
+--- a/drivers/staging/media/imx6/capture/mx6-encode.c
++++ b/drivers/staging/media/imx6/capture/mx6-encode.c
+@@ -624,17 +624,22 @@ static int encoder_stop(struct encoder_priv *priv)
+ 	struct mx6cam_dev *dev = priv->dev;
+ 	struct mx6cam_buffer *frame;
+ 	struct timeval cur_time;
++	unsigned long flags;
+ 	int i, ret;
+ 
+-	/* stop the EOF timeout timer */
++	/*
++	 * Mark next EOF interrupt as the last before encoder off,
++	 * and stop the EOF timeout timer.
++	 */
++	spin_lock_irqsave(&dev->irqlock, flags);
++	priv->last_eof = true;
+ 	del_timer_sync(&priv->eof_timeout_timer);
++	spin_unlock_irqrestore(&dev->irqlock, flags);
+ 
+ 	/*
+-	 * Mark next EOF interrupt as the last before encoder off,
+ 	 * and then wait for interrupt handler to mark completion.
+ 	 */
+ 	init_completion(&priv->last_eof_comp);
+-	priv->last_eof = true;
+ 	ret = wait_for_completion_timeout(&priv->last_eof_comp,
+ 					  msecs_to_jiffies(MX6CAM_EOF_TIMEOUT));
+ 	if (ret == 0)
+diff --git a/drivers/staging/media/imx6/capture/mx6-preview.c b/drivers/staging/media/imx6/capture/mx6-preview.c
+index 5ef0864..5ce8f49 100644
+--- a/drivers/staging/media/imx6/capture/mx6-preview.c
++++ b/drivers/staging/media/imx6/capture/mx6-preview.c
+@@ -237,11 +237,15 @@ out:
+ static irqreturn_t preview_eof_interrupt(int irq, void *dev_id)
+ {
+ 	struct preview_priv *priv = dev_id;
++	struct mx6cam_dev *dev = priv->dev;
++	unsigned long flags;
++
++	spin_lock_irqsave(&dev->irqlock, flags);
+ 
+ 	if (priv->last_eof) {
+ 		complete(&priv->last_eof_comp);
+ 		priv->last_eof = false;
+-		return IRQ_HANDLED;
++		goto unlock;
+ 	}
+ 
+ 	/* bump the EOF timeout timer */
+@@ -256,6 +260,8 @@ static irqreturn_t preview_eof_interrupt(int irq, void *dev_id)
+ 
+ 	priv->buf_num ^= 1;
+ 
++unlock:
++	spin_unlock_irqrestore(&dev->irqlock, flags);
+ 	return IRQ_HANDLED;
+ }
+ 
+@@ -572,20 +578,25 @@ out_put_ipu:
+ static int preview_stop(struct preview_priv *priv)
+ {
+ 	struct mx6cam_dev *dev = priv->dev;
++	unsigned long flags;
+ 	int ret;
+ 
+ 	if (!priv->preview_active)
+ 		return 0;
+ 
+-	/* stop the VF EOF timeout timer */
++	/*
++	 * Mark next EOF interrupt as the last before preview off,
++	 * and stop the VF EOF timeout timer.
++	 */
++	spin_lock_irqsave(&dev->irqlock, flags);
++	priv->last_eof = true;
+ 	del_timer_sync(&priv->eof_timeout_timer);
++	spin_unlock_irqrestore(&dev->irqlock, flags);
+ 
+ 	/*
+-	 * Mark next EOF interrupt as the last before preview off,
+ 	 * and then wait for interrupt handler to mark completion.
+ 	 */
+ 	init_completion(&priv->last_eof_comp);
+-	priv->last_eof = true;
+ 	ret = wait_for_completion_timeout(&priv->last_eof_comp,
+ 					  msecs_to_jiffies(MX6CAM_EOF_TIMEOUT));
+ 	if (ret == 0)
+diff --git a/drivers/staging/media/imx6/capture/mx6-vdic.c b/drivers/staging/media/imx6/capture/mx6-vdic.c
+index e21acde..fc8adaa 100644
+--- a/drivers/staging/media/imx6/capture/mx6-vdic.c
++++ b/drivers/staging/media/imx6/capture/mx6-vdic.c
+@@ -890,17 +890,22 @@ static int vdic_stop(struct vdic_priv *priv)
+ 	struct mx6cam_dev *dev = priv->dev;
+ 	struct mx6cam_buffer *frame;
+ 	struct timeval cur_time;
++	unsigned long flags;
+ 	int i, ret;
+ 
+-	/* stop the EOF timeout timer */
++	/*
++	 * Mark next EOF interrupt as the last before vdic off,
++	 * and stop the EOF timeout timer.
++	 */
++	spin_lock_irqsave(&dev->irqlock, flags);
++	priv->last_eof = true;
+ 	del_timer_sync(&priv->eof_timeout_timer);
++	spin_unlock_irqrestore(&dev->irqlock, flags);
+ 
+ 	/*
+-	 * Mark next EOF interrupt as the last before vdic off,
+ 	 * and then wait for interrupt handler to mark completion.
+ 	 */
+ 	init_completion(&priv->last_eof_comp);
+-	priv->last_eof = true;
+ 	ret = wait_for_completion_timeout(&priv->last_eof_comp,
+ 					  msecs_to_jiffies(MX6CAM_EOF_TIMEOUT));
+ 	if (ret == 0)
+-- 
+2.4.10
+

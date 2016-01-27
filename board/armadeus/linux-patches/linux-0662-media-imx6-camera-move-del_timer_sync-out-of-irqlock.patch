@@ -1,0 +1,111 @@
+From ee137ecf7f045dd4690064767118854439005628 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Mon, 28 Sep 2015 14:53:12 -0700
+Subject: [PATCH 662/668] media: imx6 camera: move del_timer_sync() out of
+ irqlock
+
+Commit 8361d2274ca645bedc727efb72ffd5bb81d3b7a2
+(media: imx6 camera: set last_eof before del_sync_timer at stop)
+wrapped del_timer_sync() around the dev->irqlock spinlock. The
+eof_timeout_timer's are not irq safe timers, and this can cause
+thread lockups as described in the header for del_timer_sync().
+Move del_timer_sync() out of the irqlock and call it later, after
+the capture hardware has been shutdown.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-encode.c  | 9 ++++-----
+ drivers/staging/media/imx6/capture/mx6-preview.c | 9 ++++-----
+ drivers/staging/media/imx6/capture/mx6-vdic.c    | 9 ++++-----
+ 3 files changed, 12 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-encode.c b/drivers/staging/media/imx6/capture/mx6-encode.c
+index e96794e..113326b 100644
+--- a/drivers/staging/media/imx6/capture/mx6-encode.c
++++ b/drivers/staging/media/imx6/capture/mx6-encode.c
+@@ -633,13 +633,9 @@ static int encoder_stop(struct encoder_priv *priv)
+ 	unsigned long flags;
+ 	int i, ret;
+ 
+-	/*
+-	 * Mark next EOF interrupt as the last before encoder off,
+-	 * and stop the EOF timeout timer.
+-	 */
++	/* mark next EOF interrupt as the last before encoder off */
+ 	spin_lock_irqsave(&dev->irqlock, flags);
+ 	priv->last_eof = true;
+-	del_timer_sync(&priv->eof_timeout_timer);
+ 	spin_unlock_irqrestore(&dev->irqlock, flags);
+ 
+ 	/*
+@@ -683,6 +679,9 @@ static int encoder_stop(struct encoder_priv *priv)
+ 
+ 	encoder_put_ipu_resources(priv);
+ 
++	/* cancel the EOF timeout timer */
++	del_timer_sync(&priv->eof_timeout_timer);
++
+ 	/* return any remaining active frames with error */
+ 	for (i = 0; i < 2; i++) {
+ 		frame = priv->active_frame[i];
+diff --git a/drivers/staging/media/imx6/capture/mx6-preview.c b/drivers/staging/media/imx6/capture/mx6-preview.c
+index 4110ce4..aed1977 100644
+--- a/drivers/staging/media/imx6/capture/mx6-preview.c
++++ b/drivers/staging/media/imx6/capture/mx6-preview.c
+@@ -591,13 +591,9 @@ static int preview_stop(struct preview_priv *priv)
+ 	if (!priv->preview_active)
+ 		return 0;
+ 
+-	/*
+-	 * Mark next EOF interrupt as the last before preview off,
+-	 * and stop the VF EOF timeout timer.
+-	 */
++	/* mark next EOF interrupt as the last before preview off */
+ 	spin_lock_irqsave(&dev->irqlock, flags);
+ 	priv->last_eof = true;
+-	del_timer_sync(&priv->eof_timeout_timer);
+ 	spin_unlock_irqrestore(&dev->irqlock, flags);
+ 
+ 	/*
+@@ -636,6 +632,9 @@ static int preview_stop(struct preview_priv *priv)
+ 
+ 	preview_put_ipu_resources(priv);
+ 
++	/* cancel the EOF timeout timer */
++	del_timer_sync(&priv->eof_timeout_timer);
++
+ 	priv->preview_active = false;
+ 	return 0;
+ }
+diff --git a/drivers/staging/media/imx6/capture/mx6-vdic.c b/drivers/staging/media/imx6/capture/mx6-vdic.c
+index edf170f..3c7cf38 100644
+--- a/drivers/staging/media/imx6/capture/mx6-vdic.c
++++ b/drivers/staging/media/imx6/capture/mx6-vdic.c
+@@ -900,13 +900,9 @@ static int vdic_stop(struct vdic_priv *priv)
+ 	unsigned long flags;
+ 	int i, ret;
+ 
+-	/*
+-	 * Mark next EOF interrupt as the last before vdic off,
+-	 * and stop the EOF timeout timer.
+-	 */
++	/* mark next EOF interrupt as the last before vdic off */
+ 	spin_lock_irqsave(&dev->irqlock, flags);
+ 	priv->last_eof = true;
+-	del_timer_sync(&priv->eof_timeout_timer);
+ 	spin_unlock_irqrestore(&dev->irqlock, flags);
+ 
+ 	/*
+@@ -933,6 +929,9 @@ static int vdic_stop(struct vdic_priv *priv)
+ 	vdic_free_dma_buf(priv, &priv->underrun_buf);
+ 	vdic_put_ipu_resources(priv);
+ 
++	/* cancel the EOF timeout timer */
++	del_timer_sync(&priv->eof_timeout_timer);
++
+ 	/* return any remaining active frames with error */
+ 	for (i = 0; i < 2; i++) {
+ 		frame = priv->active_frame[i];
+-- 
+2.4.10
+

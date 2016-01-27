@@ -1,0 +1,149 @@
+From 2febcc41d3912ac185a67bbd6497da4456abcc6d Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Mon, 16 Mar 2015 15:34:01 -0700
+Subject: [PATCH 627/668] media: imx6 camera: adv718x: add LOST_LOCK/AD_CHNG to
+ lsc
+
+Add the LOST_LOCK and AD_CHNG status bits to the lock_status_change
+determination.
+
+The LOST_LOCK bit means there was a loss of signal lock since last
+read of the STATUS_1 register. We should include this info as a
+lock_status_change event, because it might include very short loss
+of lock events that may not be caught by the other status bits. It
+is clear-on-read, so the register should only be read once in the
+interrupt handler to retain the lost lock info.
+
+The AD_CHNG bit means there is a new autodetected video standard.
+We should also include this as part of a lock_status_change event.
+
+Ported from linux-meibp cae857060db706d6513f41e732558efcae4051b0.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/adv7180.c | 39 ++++++++++++++++------------
+ 1 file changed, 22 insertions(+), 17 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/adv7180.c b/drivers/staging/media/imx6/capture/adv7180.c
+index 20af2bb..93de9e1 100644
+--- a/drivers/staging/media/imx6/capture/adv7180.c
++++ b/drivers/staging/media/imx6/capture/adv7180.c
+@@ -393,12 +393,10 @@ static int adv7180_write_reg(struct adv7180_dev *sensor, u8 reg, u8 val)
+ 
+ /* Read AD_RESULT to get the autodetected video standard */
+ static int adv7180_get_autodetect_std(struct adv7180_dev *sensor,
+-				      bool *status_change)
++				      u8 stat1, bool *status_change)
+ {
+ 	int ad_result, idx = ADV7180_PAL;
+ 	v4l2_std_id std = V4L2_STD_PAL;
+-	u8 stat1;
+-	int ret;
+ 
+ 	*status_change = false;
+ 
+@@ -410,7 +408,6 @@ static int adv7180_get_autodetect_std(struct adv7180_dev *sensor,
+ 	if (!sensor->locked)
+ 		return 0; /* no status change */
+ 
+-	ADV7180_READ_REG(sensor, ADV7180_STATUS_1, &stat1);
+ 	ad_result = (stat1 & ADV7180_AD_RESULT_MASK) >> ADV7180_AD_RESULT_BIT;
+ 
+ 	switch (ad_result) {
+@@ -467,13 +464,11 @@ static int adv7180_get_autodetect_std(struct adv7180_dev *sensor,
+ 
+ /* Update lock status */
+ static int adv7180_update_lock_status(struct adv7180_dev *sensor,
+-				      bool *status_change)
++				      u8 stat1, bool *status_change)
+ {
+-	u8 stat1, int_stat1, int_stat3, int_raw_stat3;
++	u8 int_stat1, int_stat3, int_raw_stat3;
+ 	int ret;
+ 
+-	ADV7180_READ_REG(sensor, ADV7180_STATUS_1, &stat1);
+-
+ 	/* Switch to interrupt register map */
+ 	ADV7180_WRITE_REG(sensor, 0x0E, 0x20);
+ 
+@@ -488,9 +483,11 @@ static int adv7180_update_lock_status(struct adv7180_dev *sensor,
+ 	/* Switch back to normal register map */
+ 	ADV7180_WRITE_REG(sensor, 0x0E, 0x00);
+ 
+-	*status_change = (((int_stat1 & ADV7180_INT_SD_LOCK) ||
++	*status_change = (((stat1 & ADV7180_LOST_LOCK) ||
++			   (int_stat1 & ADV7180_INT_SD_LOCK) ||
+ 			   (int_stat1 & ADV7180_INT_SD_UNLOCK) ||
+-			   (int_stat3 & ADV7180_INT_SD_V_LOCK_CHNG)) != 0);
++			   (int_stat3 & ADV7180_INT_SD_V_LOCK_CHNG) ||
++			   (int_stat3 & ADV7180_INT_SD_AD_CHNG)) != 0);
+ 
+ 	sensor->locked = ((stat1 & ADV7180_IN_LOCK) &&
+ 			  (stat1 & ADV7180_FSC_LOCK) &&
+@@ -522,11 +519,14 @@ static irqreturn_t adv7180_interrupt(int irq, void *dev_id)
+ {
+ 	struct adv7180_dev *sensor = dev_id;
+ 	bool std_change, lock_status_change;
++	u8 stat1;
+ 
+ 	mutex_lock(&sensor->mutex);
+ 
+-	adv7180_update_lock_status(sensor, &lock_status_change);
+-	adv7180_get_autodetect_std(sensor, &std_change);
++	adv7180_read_reg(sensor, ADV7180_STATUS_1, &stat1);
++
++	adv7180_update_lock_status(sensor, stat1, &lock_status_change);
++	adv7180_get_autodetect_std(sensor, stat1, &std_change);
+ 
+ 	mutex_unlock(&sensor->mutex);
+ 
+@@ -557,6 +557,7 @@ static int adv7180_querystd(struct v4l2_subdev *sd, v4l2_std_id *std)
+ 	struct adv7180_dev *sensor = to_adv7180_dev(sd);
+ 	bool std_change, lsc;
+ 	int ret = 0;
++	u8 stat1;
+ 
+ 	mutex_lock(&sensor->mutex);
+ 
+@@ -566,10 +567,12 @@ static int adv7180_querystd(struct v4l2_subdev *sd, v4l2_std_id *std)
+ 	 * bits every time querystd() is called.
+ 	 */
+ 	if (!sensor->i2c_client->irq) {
+-		ret = adv7180_update_lock_status(sensor, &lsc);
++		adv7180_read_reg(sensor, ADV7180_STATUS_1, &stat1);
++
++		ret = adv7180_update_lock_status(sensor, stat1, &lsc);
+ 		if (ret)
+ 			goto unlock;
+-		ret = adv7180_get_autodetect_std(sensor, &std_change);
++		ret = adv7180_get_autodetect_std(sensor, stat1, &std_change);
+ 		if (ret)
+ 			goto unlock;
+ 	}
+@@ -1168,7 +1171,7 @@ static int adv7180_probe(struct i2c_client *client,
+ 	struct device_node *np;
+ 	const char *norm = "pal";
+ 	bool std_change, lsc;
+-	u8 rev_id;
++	u8 stat1, rev_id;
+ 	int ret = 0;
+ 
+ 	sensor = devm_kzalloc(&client->dev, sizeof(struct adv7180_dev),
+@@ -1269,10 +1272,12 @@ static int adv7180_probe(struct i2c_client *client,
+ 	v4l2_i2c_subdev_init(&sensor->sd, client, &adv7180_subdev_ops);
+ 
+ 	/* see if there is a signal lock already */
+-	ret = adv7180_update_lock_status(sensor, &lsc);
++	adv7180_read_reg(sensor, ADV7180_STATUS_1, &stat1);
++
++	ret = adv7180_update_lock_status(sensor, stat1, &lsc);
+ 	if (ret < 0)
+ 		goto cleanup;
+-	ret = adv7180_get_autodetect_std(sensor, &std_change);
++	ret = adv7180_get_autodetect_std(sensor, stat1, &std_change);
+ 	if (ret < 0)
+ 		goto cleanup;
+ 
+-- 
+2.4.10
+

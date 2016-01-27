@@ -1,0 +1,39 @@
+From 3e622b670362043a0fbafbd48c79737af93ebdc0 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Tue, 11 Aug 2015 17:26:55 -0700
+Subject: [PATCH 659/668] media: imx6: ov5640: add note about possible delay
+ needed
+
+Add note that Freescale adds a long delay (600 msec) after
+powering up and programming a mode on the ov5640-mipi camera.
+If we run into MIPI CSI-2 receiver dphy ready timeouts, it
+might be a clue to add that delay.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/ov5640-mipi.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/drivers/staging/media/imx6/capture/ov5640-mipi.c b/drivers/staging/media/imx6/capture/ov5640-mipi.c
+index 3a4837b..fd1572f 100644
+--- a/drivers/staging/media/imx6/capture/ov5640-mipi.c
++++ b/drivers/staging/media/imx6/capture/ov5640-mipi.c
+@@ -1431,6 +1431,15 @@ static int ov5640_s_power(struct v4l2_subdev *sd, int on)
+ 		ret = ov5640_restore_mode(sensor);
+ 		if (ret)
+ 			return ret;
++		/*
++		 * NOTE: Freescale adds a long delay (600 msec) after
++		 * powering up and programming a mode on the ov5640-mipi
++		 * camera (search for "msec_wait4stable" in FSL's
++		 * ov5640_mipi.c), which equivalently would need to go
++		 * right here. If we run into MIPI CSI-2 receiver dphy
++		 * ready timeouts, it might be a clue to add that delay
++		 * here.
++		 */
+ 	} else if (!on && sensor->on) {
+ 		ov5640_power(sensor, false);
+ 
+-- 
+2.4.10
+

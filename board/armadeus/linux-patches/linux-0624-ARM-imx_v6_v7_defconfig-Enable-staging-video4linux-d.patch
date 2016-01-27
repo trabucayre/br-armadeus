@@ -1,0 +1,39 @@
+From 74970fe1bf92a51129db2b25d254f83ef78ea55e Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Tue, 9 Sep 2014 18:18:06 -0700
+Subject: [PATCH 624/668] ARM: imx_v6_v7_defconfig: Enable staging video4linux
+ drivers
+
+Enable imx6 v4l2 staging drivers as modules. For video capture on
+the SabreAuto, the ADV7180 video decoder also requires the
+i2c-mux-gpio and the max7310 port expander.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ arch/arm/configs/imx_v6_v7_defconfig | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/arch/arm/configs/imx_v6_v7_defconfig b/arch/arm/configs/imx_v6_v7_defconfig
+index 79194c6..affb3f3 100644
+--- a/arch/arm/configs/imx_v6_v7_defconfig
++++ b/arch/arm/configs/imx_v6_v7_defconfig
+@@ -175,6 +175,7 @@ CONFIG_SERIAL_FSL_LPUART_CONSOLE=y
+ CONFIG_HW_RANDOM=y
+ # CONFIG_I2C_COMPAT is not set
+ CONFIG_I2C_CHARDEV=y
++CONFIG_I2C_MUX_GPIO=m
+ # CONFIG_I2C_HELPER_AUTO is not set
+ CONFIG_I2C_ALGOPCF=m
+ CONFIG_I2C_ALGOPCA=m
+@@ -314,6 +315,8 @@ CONFIG_IMX_SDMA=y
+ CONFIG_MXS_DMA=y
+ CONFIG_FSL_EDMA=y
+ CONFIG_STAGING=y
++CONFIG_STAGING_MEDIA=y
++CONFIG_VIDEO_IMX6=m
+ # CONFIG_IOMMU_SUPPORT is not set
+ CONFIG_PWM=y
+ CONFIG_PWM_IMX=y
+-- 
+2.4.10
+

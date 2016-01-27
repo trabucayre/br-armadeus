@@ -1,0 +1,127 @@
+From e6c84cb5ad8c0523f28803e6a3cae57c3f633e59 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Wed, 10 Jun 2015 15:12:55 -0700
+Subject: [PATCH 647/668] media: imx6 camera: adv7180: Add DNR and Luma Peak
+ Gain controls
+
+Add custom controls for Digital Noise Reduction enable and thresholds,
+and Luma Peaking Gain (attenuates or amplifies luma signal around 3 MHz
+spacial frequencies).
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/adv7180.c | 59 ++++++++++++++++++++++++++++
+ include/media/imx6.h                         |  5 +++
+ 2 files changed, 64 insertions(+)
+
+diff --git a/drivers/staging/media/imx6/capture/adv7180.c b/drivers/staging/media/imx6/capture/adv7180.c
+index ac98dcb..fcf21a7 100644
+--- a/drivers/staging/media/imx6/capture/adv7180.c
++++ b/drivers/staging/media/imx6/capture/adv7180.c
+@@ -172,7 +172,9 @@ static struct video_fmt_t video_fmts[] = {
+ #define   ADV7180_CTI_AB_EN            (1 << 1) /* CTI Alpha Blend enable */
+ #define   ADV7180_CTI_AB_BIT           2 /* CTI Alpha Blend sharpness */
+ #define   ADV7180_CTI_AB_MASK          (0x3 << ADV7180_CTI_AB_BIT)
++#define   ADV7180_DNR_EN               (1 << 5) /* DNR enable */
+ #define ADV7180_CTI_THRESH             0x4e /* CTI Chroma Amplitude Threshold */
++#define ADV7180_DNR_THRESH1            0x50
+ #define ADV7180_LOCK_COUNT             0x51
+ #define ADV7180_CVBS_TRIM              0x52
+ #define ADV7180_SD_OFFSET_CB           0xe1	/* SD Offset Cb */
+@@ -180,6 +182,8 @@ static struct video_fmt_t video_fmts[] = {
+ #define ADV7180_SD_SATURATION_CB       0xe3	/* SD Saturation Cb */
+ #define ADV7180_SD_SATURATION_CR       0xe4	/* SD Saturation Cr */
+ #define ADV7180_DRIVE_STRENGTH         0xf4
++#define ADV7180_LUMA_PEAK_GAIN         0xfb
++#define ADV7180_DNR_THRESH2            0xfc
+ /* Interrupt Register Map */
+ #define ADV7180_INT_CONFIG_1           0x40     /* Interrupt Config 1 */
+ #define ADV7180_INT_STATUS_1           0x42     /* Interrupt Status 1 (r/o) */
+@@ -859,6 +863,25 @@ static int adv7180_s_ctrl(struct v4l2_ctrl *ctrl)
+ 		tmp = ctrl->val;
+ 		ADV7180_WRITE_REG(sensor, ADV7180_CTI_THRESH, tmp);
+ 		break;
++	case V4L2_CID_ADV718x_DNR_ENABLE:
++		ADV7180_READ_REG(sensor, ADV7180_CTI_DNR, &tmp);
++		tmp &= ~ADV7180_DNR_EN;
++		if (ctrl->val)
++			tmp |= ADV7180_DNR_EN;
++		ADV7180_WRITE_REG(sensor, ADV7180_CTI_DNR, tmp);
++		break;
++	case V4L2_CID_ADV718x_DNR_THRESH1:
++		tmp = ctrl->val;
++		ADV7180_WRITE_REG(sensor, ADV7180_DNR_THRESH1, tmp);
++		break;
++	case V4L2_CID_ADV718x_LUMA_PEAK_GAIN:
++		tmp = ctrl->val;
++		ADV7180_WRITE_REG(sensor, ADV7180_LUMA_PEAK_GAIN, tmp);
++		break;
++	case V4L2_CID_ADV718x_DNR_THRESH2:
++		tmp = ctrl->val;
++		ADV7180_WRITE_REG(sensor, ADV7180_DNR_THRESH2, tmp);
++		break;
+ 	default:
+ 		ret = -EPERM;
+ 		break;
+@@ -1010,6 +1033,42 @@ static const struct v4l2_ctrl_config adv7180_custom_ctrl[] = {
+ 		.min =   0,
+ 		.max = 255,
+ 		.step =  1,
++	}, {
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_DNR_ENABLE,
++		.type = V4L2_CTRL_TYPE_BOOLEAN,
++		.name = "DNR Enable",
++		.def =  1,
++		.min =  0,
++		.max =  1,
++		.step = 1,
++	}, {
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_DNR_THRESH1,
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.name = "DNR1 Threshold",
++		.def =   8,
++		.min =   0,
++		.max = 255,
++		.step =  1,
++	}, {
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_LUMA_PEAK_GAIN,
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.name = "Luma Peak Gain",
++		.def =  64,
++		.min =   0,
++		.max = 255,
++		.step =  1,
++	}, {
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_DNR_THRESH2,
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.name = "DNR2 Threshold",
++		.def =   4,
++		.min =   0,
++		.max = 255,
++		.step =  1,
+ 	},
+ };
+ #define ADV7180_NUM_CUSTOM_CONTROLS ARRAY_SIZE(adv7180_custom_ctrl)
+diff --git a/include/media/imx6.h b/include/media/imx6.h
+index 22c20ed..5fc279a 100644
+--- a/include/media/imx6.h
++++ b/include/media/imx6.h
+@@ -27,6 +27,11 @@ enum adv718x_ctrl_id {
+ 	V4L2_CID_ADV718x_CTI_AB_ENABLE,
+ 	V4L2_CID_ADV718x_CTI_AB,
+ 	V4L2_CID_ADV718x_CTI_THRESH,
++	/* Digital Noise Reduction and Lumanance Peaking Gain Controls */
++	V4L2_CID_ADV718x_DNR_ENABLE,
++	V4L2_CID_ADV718x_DNR_THRESH1,
++	V4L2_CID_ADV718x_LUMA_PEAK_GAIN,
++	V4L2_CID_ADV718x_DNR_THRESH2,
+ };
+ 
+ /*
+-- 
+2.4.10
+

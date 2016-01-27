@@ -1,0 +1,178 @@
+From 426c8b3aea098e6ab6c0dda6d61d0927294335ed Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Wed, 13 May 2015 10:46:40 -0700
+Subject: [PATCH 639/668] media: imx6 camera: Rename depth to bpp in struct
+ mx6cam_pixfmt
+
+Depth refers to the total number of meaningful bits in a pixel format,
+whereas "bpp" is the total amount of bits the pixel takes up in memory.
+What was really meant in struct mx6cam_pixfmt was bpp, so change the
+name. No functional changes.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c   | 26 ++++++++++++------------
+ drivers/staging/media/imx6/capture/mx6-camif.h   |  2 +-
+ drivers/staging/media/imx6/capture/mx6-encode.c  |  2 +-
+ drivers/staging/media/imx6/capture/mx6-preview.c |  4 ++--
+ drivers/staging/media/imx6/capture/mx6-vdic.c    |  4 ++--
+ 5 files changed, 19 insertions(+), 19 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index 90455c6..94ccf99 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -84,60 +84,60 @@ static struct mx6cam_pixfmt mx6cam_pixformats[] = {
+ 		.name	= "RGB565",
+ 		.fourcc	= V4L2_PIX_FMT_RGB565,
+ 		.codes  = {MEDIA_BUS_FMT_RGB565_2X8_LE},
+-		.depth  = 16,
++		.bpp    = 16,
+ 	}, {
+ 		.name	= "RGB24",
+ 		.fourcc	= V4L2_PIX_FMT_RGB24,
+ 		.codes  = {MEDIA_BUS_FMT_RGB888_1X24,
+ 			   MEDIA_BUS_FMT_RGB888_2X12_LE},
+-		.depth  = 24,
++		.bpp    = 24,
+ 	}, {
+ 		.name	= "BGR24",
+ 		.fourcc	= V4L2_PIX_FMT_BGR24,
+-		.depth  = 24,
++		.bpp    = 24,
+ 	}, {
+ 		.name	= "RGB32",
+ 		.fourcc	= V4L2_PIX_FMT_RGB32,
+ 		.codes = {MEDIA_BUS_FMT_ARGB8888_1X32},
+-		.depth  = 32,
++		.bpp   = 32,
+ 	}, {
+ 		.name	= "BGR32",
+ 		.fourcc	= V4L2_PIX_FMT_BGR32,
+-		.depth  = 32,
++		.bpp    = 32,
+ 	}, {
+ 		.name	= "4:2:2 packed, YUYV",
+ 		.fourcc	= V4L2_PIX_FMT_YUYV,
+ 		.codes = {MEDIA_BUS_FMT_YUYV8_2X8, MEDIA_BUS_FMT_YUYV8_1X16},
+-		.depth  = 16,
++		.bpp   = 16,
+ 	}, {
+ 		.name	= "4:2:2 packed, UYVY",
+ 		.fourcc	= V4L2_PIX_FMT_UYVY,
+ 		.codes = {MEDIA_BUS_FMT_UYVY8_2X8, MEDIA_BUS_FMT_UYVY8_1X16},
+-		.depth  = 16,
++		.bpp   = 16,
+ 	}, {
+ 		.name	= "4:2:0 planar, YUV",
+ 		.fourcc	= V4L2_PIX_FMT_YUV420,
+-		.depth  = 12,
++		.bpp    = 12,
+ 		.y_depth = 8,
+ 	}, {
+ 		.name   = "4:2:0 planar, YVU",
+ 		.fourcc = V4L2_PIX_FMT_YVU420,
+-		.depth  = 12,
++		.bpp    = 12,
+ 		.y_depth = 8,
+ 	}, {
+ 		.name   = "4:2:2 planar, YUV",
+ 		.fourcc = V4L2_PIX_FMT_YUV422P,
+-		.depth  = 16,
++		.bpp    = 16,
+ 		.y_depth = 8,
+ 	}, {
+ 		.name   = "4:2:0 planar, Y/CbCr",
+ 		.fourcc = V4L2_PIX_FMT_NV12,
+-		.depth  = 12,
++		.bpp    = 12,
+ 		.y_depth = 8,
+ 	}, {
+ 		.name   = "4:2:2 planar, Y/CbCr",
+ 		.fourcc = V4L2_PIX_FMT_NV16,
+-		.depth  = 16,
++		.bpp    = 16,
+ 		.y_depth = 8,
+ 	},
+ };
+@@ -341,7 +341,7 @@ static void adjust_user_fmt(struct mx6cam_dev *dev,
+ 
+ 	fmt = mx6cam_get_format(uf->fmt.pix.pixelformat, 0);
+ 
+-	uf->fmt.pix.bytesperline = (uf->fmt.pix.width * fmt->depth) >> 3;
++	uf->fmt.pix.bytesperline = (uf->fmt.pix.width * fmt->bpp) >> 3;
+ 	uf->fmt.pix.sizeimage = uf->fmt.pix.height * uf->fmt.pix.bytesperline;
+ }
+ 
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.h b/drivers/staging/media/imx6/capture/mx6-camif.h
+index 36e6bb4..3b5da9d 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.h
++++ b/drivers/staging/media/imx6/capture/mx6-camif.h
+@@ -56,7 +56,7 @@ struct mx6cam_pixfmt {
+ 	char	*name;
+ 	u32	fourcc;
+ 	u32     codes[4];
+-	int     depth;   /* total bpp */
++	int     bpp;     /* total bpp */
+ 	int     y_depth; /* depth of first Y plane for planar formats */
+ };
+ 
+diff --git a/drivers/staging/media/imx6/capture/mx6-encode.c b/drivers/staging/media/imx6/capture/mx6-encode.c
+index 4219a0a..e347fb2 100644
+--- a/drivers/staging/media/imx6/capture/mx6-encode.c
++++ b/drivers/staging/media/imx6/capture/mx6-encode.c
+@@ -304,7 +304,7 @@ static void encoder_setup_channel(struct encoder_priv *priv,
+ 
+ 	stride = dev->user_pixfmt->y_depth ?
+ 		(width * dev->user_pixfmt->y_depth) >> 3 :
+-		(width * dev->user_pixfmt->depth) >> 3;
++		(width * dev->user_pixfmt->bpp) >> 3;
+ 
+ 	ipu_cpmem_zero(channel);
+ 
+diff --git a/drivers/staging/media/imx6/capture/mx6-preview.c b/drivers/staging/media/imx6/capture/mx6-preview.c
+index 42eeb59..2df4802 100644
+--- a/drivers/staging/media/imx6/capture/mx6-preview.c
++++ b/drivers/staging/media/imx6/capture/mx6-preview.c
+@@ -249,7 +249,7 @@ static void preview_setup_channel(struct preview_priv *priv,
+ 	}
+ 	stride = dev->fbuf_pixfmt->y_depth ?
+ 		(width * dev->fbuf_pixfmt->y_depth) >> 3 :
+-		(width * dev->fbuf_pixfmt->depth) >> 3;
++		(width * dev->fbuf_pixfmt->bpp) >> 3;
+ 
+ 	ipu_cpmem_zero(channel);
+ 
+@@ -469,7 +469,7 @@ static int preview_start(struct preview_priv *priv)
+ 	priv->outf.pixelformat = dev->fbuf.fmt.pixelformat;
+ 	priv->outf.sizeimage =
+ 		(priv->outf.width * priv->outf.height *
+-		 dev->fbuf_pixfmt->depth) >> 3;
++		 dev->fbuf_pixfmt->bpp) >> 3;
+ 	priv->out_cs = ipu_pixelformat_to_colorspace(priv->outf.pixelformat);
+ 
+ 	fb_buf = priv->fbuf.phys;
+diff --git a/drivers/staging/media/imx6/capture/mx6-vdic.c b/drivers/staging/media/imx6/capture/mx6-vdic.c
+index 498918d..e21acde 100644
+--- a/drivers/staging/media/imx6/capture/mx6-vdic.c
++++ b/drivers/staging/media/imx6/capture/mx6-vdic.c
+@@ -777,14 +777,14 @@ static int vdic_start(struct vdic_priv *priv)
+ 	priv->inf.height = dev->crop.height;
+ 	priv->in_stride = dev->sensor_pixfmt->y_depth ?
+ 		(priv->inf.width * dev->sensor_pixfmt->y_depth) >> 3 :
+-		(priv->inf.width * dev->sensor_pixfmt->depth) >> 3;
++		(priv->inf.width * dev->sensor_pixfmt->bpp) >> 3;
+ 	priv->in_cs = ipu_mbus_code_to_colorspace(priv->inf.code);
+ 
+ 	priv->outf = dev->user_fmt.fmt.pix;
+ 	priv->out_cs = ipu_pixelformat_to_colorspace(priv->outf.pixelformat);
+ 	priv->out_stride = dev->user_pixfmt->y_depth ?
+ 		(priv->outf.width * dev->user_pixfmt->y_depth) >> 3 :
+-		(priv->outf.width * dev->user_pixfmt->depth) >> 3;
++		(priv->outf.width * dev->user_pixfmt->bpp) >> 3;
+ 
+ 	/* set IC to receive from VDIC */
+ 	ipu_ic_set_src(priv->ic_vf, csi_id, true);
+-- 
+2.4.10
+

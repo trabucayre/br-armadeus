@@ -1,0 +1,125 @@
+From 9c193c5de60e2e1c89cfd1fd84e2a37e1c31ec2a Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Wed, 10 Jun 2015 11:02:49 -0700
+Subject: [PATCH 646/668] media: imx6 camera: adv7180: Add CTI controls
+
+Add custom controls for Chroma Transient Improvements. This includes
+enabling CTI block, enabling CTI alpha-blending, sharpness setting
+for CTI alpha-blending, and chroma amplitude threshold.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/adv7180.c | 66 ++++++++++++++++++++++++++++
+ include/media/imx6.h                         |  5 +++
+ 2 files changed, 71 insertions(+)
+
+diff --git a/drivers/staging/media/imx6/capture/adv7180.c b/drivers/staging/media/imx6/capture/adv7180.c
+index 40e4611..ac98dcb 100644
+--- a/drivers/staging/media/imx6/capture/adv7180.c
++++ b/drivers/staging/media/imx6/capture/adv7180.c
+@@ -167,6 +167,12 @@ static struct video_fmt_t video_fmts[] = {
+ #define ADV7180_MANUAL_WIN_CTL_1       0x3d	/* Manual Window Control 1 */
+ #define ADV7180_MANUAL_WIN_CTL_2       0x3e     /* Manual Window Control 2 */
+ #define ADV7180_MANUAL_WIN_CTL_3       0x3f     /* Manual Window Control 3 */
++#define ADV7180_CTI_DNR                0x4d
++#define   ADV7180_CTI_EN               (1 << 0) /* CTI enable */
++#define   ADV7180_CTI_AB_EN            (1 << 1) /* CTI Alpha Blend enable */
++#define   ADV7180_CTI_AB_BIT           2 /* CTI Alpha Blend sharpness */
++#define   ADV7180_CTI_AB_MASK          (0x3 << ADV7180_CTI_AB_BIT)
++#define ADV7180_CTI_THRESH             0x4e /* CTI Chroma Amplitude Threshold */
+ #define ADV7180_LOCK_COUNT             0x51
+ #define ADV7180_CVBS_TRIM              0x52
+ #define ADV7180_SD_OFFSET_CB           0xe1	/* SD Offset Cb */
+@@ -829,6 +835,30 @@ static int adv7180_s_ctrl(struct v4l2_ctrl *ctrl)
+ 		tmp |= (ctrl->val << ADV7180_DEF_CR_BIT);
+ 		ADV7180_WRITE_REG(sensor, ADV7180_DEF_C, tmp);
+ 		break;
++	case V4L2_CID_ADV718x_CTI_ENABLE:
++		ADV7180_READ_REG(sensor, ADV7180_CTI_DNR, &tmp);
++		tmp &= ~ADV7180_CTI_EN;
++		if (ctrl->val)
++			tmp |= ADV7180_CTI_EN;
++		ADV7180_WRITE_REG(sensor, ADV7180_CTI_DNR, tmp);
++		break;
++	case V4L2_CID_ADV718x_CTI_AB_ENABLE:
++		ADV7180_READ_REG(sensor, ADV7180_CTI_DNR, &tmp);
++		tmp &= ~ADV7180_CTI_AB_EN;
++		if (ctrl->val)
++			tmp |= ADV7180_CTI_AB_EN;
++		ADV7180_WRITE_REG(sensor, ADV7180_CTI_DNR, tmp);
++		break;
++	case V4L2_CID_ADV718x_CTI_AB:
++		ADV7180_READ_REG(sensor, ADV7180_CTI_DNR, &tmp);
++		tmp &= ~ADV7180_CTI_AB_MASK;
++		tmp |= (ctrl->val << ADV7180_CTI_AB_BIT);
++		ADV7180_WRITE_REG(sensor, ADV7180_CTI_DNR, tmp);
++		break;
++	case V4L2_CID_ADV718x_CTI_THRESH:
++		tmp = ctrl->val;
++		ADV7180_WRITE_REG(sensor, ADV7180_CTI_THRESH, tmp);
++		break;
+ 	default:
+ 		ret = -EPERM;
+ 		break;
+@@ -944,6 +974,42 @@ static const struct v4l2_ctrl_config adv7180_custom_ctrl[] = {
+ 		.min =   0,
+ 		.max =  15,
+ 		.step =  1,
++	}, {
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_CTI_ENABLE,
++		.type = V4L2_CTRL_TYPE_BOOLEAN,
++		.name = "CTI Enable",
++		.def =  0,
++		.min =  0,
++		.max =  1,
++		.step = 1,
++	}, {
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_CTI_AB_ENABLE,
++		.type = V4L2_CTRL_TYPE_BOOLEAN,
++		.name = "CTI AB Enable",
++		.def =  0,
++		.min =  0,
++		.max =  1,
++		.step = 1,
++	}, {
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_CTI_AB,
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.name = "CTI AB Sharpness",
++		.def =  3,
++		.min =  0,
++		.max =  3,
++		.step = 1,
++	}, {
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_CTI_THRESH,
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.name = "CTI Threshold",
++		.def =   8,
++		.min =   0,
++		.max = 255,
++		.step =  1,
+ 	},
+ };
+ #define ADV7180_NUM_CUSTOM_CONTROLS ARRAY_SIZE(adv7180_custom_ctrl)
+diff --git a/include/media/imx6.h b/include/media/imx6.h
+index ad02ace..22c20ed 100644
+--- a/include/media/imx6.h
++++ b/include/media/imx6.h
+@@ -22,6 +22,11 @@ enum adv718x_ctrl_id {
+ 	V4L2_CID_ADV718x_FREERUN_Y,
+ 	V4L2_CID_ADV718x_FREERUN_CB,
+ 	V4L2_CID_ADV718x_FREERUN_CR,
++	/* Chroma Transient Improvement Controls */
++	V4L2_CID_ADV718x_CTI_ENABLE,
++	V4L2_CID_ADV718x_CTI_AB_ENABLE,
++	V4L2_CID_ADV718x_CTI_AB,
++	V4L2_CID_ADV718x_CTI_THRESH,
+ };
+ 
+ /*
+-- 
+2.4.10
+

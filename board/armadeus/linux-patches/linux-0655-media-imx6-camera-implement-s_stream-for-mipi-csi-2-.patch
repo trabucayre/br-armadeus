@@ -1,0 +1,129 @@
+From d7e3d25dc6b6fff5d7bc08d132c2eae42fabd97f Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Fri, 7 Aug 2015 14:44:56 -0700
+Subject: [PATCH 655/668] media: imx6 camera: implement s_stream for mipi csi-2
+ subdev
+
+Implement the s_stream subdev op for the mipi csi-2 receiver subdev,
+and call it as part of sensor_set_stream().
+
+The mx6csi2_dphy_wait() is moved out of s_power op and into the new
+s_stream op. This allows more time for the dphy to receive a clock on
+the clock lane from the sensor after the sensor and dphy are powered on
+earlier by s_power.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mipi-csi2.c | 18 ++++++++++++++--
+ drivers/staging/media/imx6/capture/mx6-camif.c | 30 ++++++++++++++++++++------
+ 2 files changed, 39 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mipi-csi2.c b/drivers/staging/media/imx6/capture/mipi-csi2.c
+index 1eaccbd..02283c7 100644
+--- a/drivers/staging/media/imx6/capture/mipi-csi2.c
++++ b/drivers/staging/media/imx6/capture/mipi-csi2.c
+@@ -179,7 +179,6 @@ static int mx6csi2_dphy_wait(struct mx6csi2_dev *csi2)
+ static int mx6csi2_s_power(struct v4l2_subdev *sd, int on)
+ {
+ 	struct mx6csi2_dev *csi2 = sd_to_dev(sd);
+-	int ret = 0;
+ 
+ 	if (on && !csi2->on) {
+ 		v4l2_info(&csi2->sd, "power on\n");
+@@ -187,7 +186,6 @@ static int mx6csi2_s_power(struct v4l2_subdev *sd, int on)
+ 		clk_prepare_enable(csi2->dphy_clk);
+ 		mx6csi2_set_lanes(csi2);
+ 		mx6csi2_reset(csi2);
+-		ret = mx6csi2_dphy_wait(csi2);
+ 	} else if (!on && csi2->on) {
+ 		v4l2_info(&csi2->sd, "power off\n");
+ 		mx6csi2_enable(csi2, false);
+@@ -196,6 +194,17 @@ static int mx6csi2_s_power(struct v4l2_subdev *sd, int on)
+ 	}
+ 
+ 	csi2->on = on;
++	return 0;
++}
++
++static int mx6csi2_s_stream(struct v4l2_subdev *sd, int enable)
++{
++	struct mx6csi2_dev *csi2 = sd_to_dev(sd);
++	int ret = 0;
++
++	if (enable)
++		ret = mx6csi2_dphy_wait(csi2);
++
+ 	return ret;
+ }
+ 
+@@ -203,8 +212,13 @@ static struct v4l2_subdev_core_ops mx6csi2_core_ops = {
+ 	.s_power = mx6csi2_s_power,
+ };
+ 
++static struct v4l2_subdev_video_ops mx6csi2_video_ops = {
++	.s_stream = mx6csi2_s_stream,
++};
++
+ static struct v4l2_subdev_ops mx6csi2_subdev_ops = {
+ 	.core = &mx6csi2_core_ops,
++	.video = &mx6csi2_video_ops,
+ };
+ 
+ static int mx6csi2_parse_endpoints(struct mx6csi2_dev *csi2)
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index 7735642..6b1e4d3 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -537,7 +537,7 @@ static int frame_interval_monitor(struct mx6cam_dev *dev, struct timeval *now)
+ static int sensor_set_stream(struct mx6cam_dev *dev, int on)
+ {
+ 	struct mx6cam_endpoint *ep = dev->ep;
+-	int ret, ret2;
++	int ret;
+ 
+ 	if (on && ep->stream_count++ > 0)
+ 		return 0;
+@@ -548,18 +548,34 @@ static int sensor_set_stream(struct mx6cam_dev *dev, int on)
+ 		ret = v4l2_subdev_call(ep->sd, video, s_stream, true);
+ 		if (ret && ret != -ENOIOCTLCMD)
+ 			goto out;
++
++		if (dev->ep->ep.bus_type == V4L2_MBUS_CSI2 && dev->csi2_sd) {
++			ret = v4l2_subdev_call(dev->csi2_sd, video, s_stream,
++					       true);
++			if (ret)
++				goto ep_off;
++		}
++
+ 		ret = v4l2_subdev_call(dev->csi_sd, video, s_stream, true);
+ 		if (ret)
+-			v4l2_subdev_call(ep->sd, video, s_stream, false);
++			goto csi2_off;
+ 	} else {
+-		ret2 = v4l2_subdev_call(dev->csi_sd, video, s_stream, false);
+-		ret = v4l2_subdev_call(ep->sd, video, s_stream, false);
+-		if (!ret || ret == -ENOIOCTLCMD)
+-			ret = ret2;
++		v4l2_subdev_call(dev->csi_sd, video, s_stream, false);
++		if (dev->ep->ep.bus_type == V4L2_MBUS_CSI2 && dev->csi2_sd)
++			v4l2_subdev_call(dev->csi2_sd, video, s_stream, false);
++		v4l2_subdev_call(ep->sd, video, s_stream, false);
+ 	}
+ 
++	return 0;
++
++csi2_off:
++	if (dev->ep->ep.bus_type == V4L2_MBUS_CSI2 && dev->csi2_sd)
++		v4l2_subdev_call(dev->csi2_sd, video, s_stream, false);
++ep_off:
++	v4l2_subdev_call(ep->sd, video, s_stream, false);
+ out:
+-	return ret != -ENOIOCTLCMD ? ret : 0;
++	ep->stream_count--;
++	return ret;
+ }
+ 
+ /*
+-- 
+2.4.10
+

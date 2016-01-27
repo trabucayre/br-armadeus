@@ -1,0 +1,580 @@
+From e961bee08d43c8e2fd66c413256406544ccbc2c6 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Wed, 12 Aug 2015 18:07:06 -0700
+Subject: [PATCH 654/668] media: imx6 camera: add a frame interval monitor
+
+The adv718x decoders can occasionally send corrupt fields during
+NTSC/PAL signal re-sync (too little or too many video lines). When
+this happens, the IPU triggers a mechanism to re-establish vertical
+sync by adding 1 dummy line every frame, which causes a rolling effect
+from image to image, and can last a long time before a stable image is
+recovered. Or sometimes the mechanism doesn't work at all, causing a
+permanent split image (one frame contains lines from two consecutive
+captured images).
+
+From experiment it was found that during image rolling, the frame
+intervals (elapsed time between two EOF's) drop below the nominal
+value for the current standard, by about one frame time (60 usec),
+and remain at that value until rolling stops.
+
+While the reason for this observation isn't known (the IPU dummy
+line mechanism should show an increase in the intervals by 1 line
+time every frame, not a fixed value), we can use it to detect the
+corrupt fields using a frame interval monitor. If the FIM detects a
+bad frame interval we send a MX6CAM_FRAME_INTERVAL_NOTIFY. This will
+restart IPU capture which corrects the rolling/split image.
+
+New custom controls have been added to tweak some dials. If one
+of these controls is changed during streaming, the FIM monitor will
+be reset and will continue at the new settings.
+
+- V4L2_CID_IMX6_FIM_ENABLE
+
+Enable/disable the FIM. For the adv718x decoders FIM is automatically
+enabled at probe time.
+
+- V4L2_CID_IMX6_FIM_NUM
+
+How many frame intervals to average before comparing against the nominal
+frame interval reported by the sensor. This can reduce noise from interrupt
+latency.
+
+- V4L2_CID_IMX6_FIM_TOLERANCE
+
+If the averaged intervals fall outside nominal by this amount, in
+microseconds, streaming will be restarted.
+
+- V4L2_CID_IMX6_FIM_NUM_SKIP
+
+How many frames to skip after a FIM reset or stream restart before
+FIM begins to average intervals. It has been found that there are
+always a few bad frame intervals after stream restart, so this is
+used to skip those frames to prevent endless restarts.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c   | 259 +++++++++++++++++++++--
+ drivers/staging/media/imx6/capture/mx6-camif.h   |  31 ++-
+ drivers/staging/media/imx6/capture/mx6-encode.c  |   7 +-
+ drivers/staging/media/imx6/capture/mx6-preview.c |   7 +
+ drivers/staging/media/imx6/capture/mx6-vdic.c    |   8 +-
+ include/media/imx6.h                             |   4 +
+ 6 files changed, 291 insertions(+), 25 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index 12cd406..7735642 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -377,8 +377,31 @@ static int update_sensor_std(struct mx6cam_dev *dev)
+ 				&dev->current_std);
+ }
+ 
++static void update_fim(struct mx6cam_dev *dev)
++{
++	struct v4l2_ctrl *num = dev->fim_ctrl[FIM_CL_NUM];
++
++	if (dev->sensor_tpf.denominator == 0) {
++		dev->fim_enabled = false;
++		return;
++	}
++
++	dev->fim_nominal = DIV_ROUND_CLOSEST(
++		1000 * 1000 * dev->sensor_tpf.numerator,
++		dev->sensor_tpf.denominator);
++
++	num->minimum = 1 + DIV_ROUND_UP(MX6CAM_RESTART_DELAY * 1000,
++					dev->fim_nominal);
++	num->maximum = 16 * num->minimum;
++
++	num->val = clamp_t(int, num->val, num->minimum, num->maximum);
++	num->default_value = num->minimum;
++	num->cur.val = num->val;
++}
++
+ static int update_sensor_fmt(struct mx6cam_dev *dev)
+ {
++	struct v4l2_streamparm parm;
+ 	int ret;
+ 
+ 	ret = v4l2_subdev_call(dev->ep->sd, video, g_mbus_fmt,
+@@ -386,6 +409,14 @@ static int update_sensor_fmt(struct mx6cam_dev *dev)
+ 	if (ret)
+ 		return ret;
+ 
++	parm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
++	ret = v4l2_subdev_call(dev->ep->sd, video, g_parm, &parm);
++	if (ret)
++		memset(&dev->sensor_tpf, 0, sizeof(dev->sensor_tpf));
++	else
++		dev->sensor_tpf = parm.parm.capture.timeperframe;
++	update_fim(dev);
++
+ 	ret = v4l2_subdev_call(dev->ep->sd, video, g_mbus_config,
+ 			       &dev->mbus_cfg);
+ 	if (ret)
+@@ -422,6 +453,84 @@ static int sensor_set_power(struct mx6cam_dev *dev, int on)
+ 	return ret != -ENOIOCTLCMD ? ret : 0;
+ }
+ 
++static void reset_fim(struct mx6cam_dev *dev, bool curval)
++{
++	struct v4l2_ctrl *en = dev->fim_ctrl[FIM_CL_ENABLE];
++	struct v4l2_ctrl *num = dev->fim_ctrl[FIM_CL_NUM];
++	struct v4l2_ctrl *skip = dev->fim_ctrl[FIM_CL_NUM_SKIP];
++	struct v4l2_ctrl *tol = dev->fim_ctrl[FIM_CL_TOLERANCE];
++	unsigned long flags;
++
++	spin_lock_irqsave(&dev->irqlock, flags);
++
++	if (curval) {
++		dev->fim_enabled = en->cur.val;
++		dev->fim_num_avg = num->cur.val;
++		dev->fim_num_skip = skip->cur.val;
++		dev->fim_tolerance = tol->cur.val;
++	} else {
++		dev->fim_enabled = en->val;
++		dev->fim_num_avg = num->val;
++		dev->fim_num_skip = skip->val;
++		dev->fim_tolerance = tol->val;
++	}
++
++	dev->fim_counter = -dev->fim_num_skip;
++	dev->fim_sum = 0;
++
++	spin_unlock_irqrestore(&dev->irqlock, flags);
++}
++
++/*
++ * Monitor an averaged frame interval. If the average deviates too much
++ * from the sensor's nominal frame rate, return -EIO. Called by the
++ * encode, vdic, and preview subdevs in their EOF interrupt handlers
++ * with the irqlock held.
++ *
++ * The frame intervals are averaged in order to quiet noise from
++ * (presumably random) interrupt latency.
++ */
++static int frame_interval_monitor(struct mx6cam_dev *dev, struct timeval *now)
++{
++	unsigned long interval, interval_avg, error;
++	struct timespec ts, diff;
++	int ret = 0;
++
++	if (!dev->fim_enabled)
++		return 0;
++
++	dev->fim_counter++;
++
++	ts.tv_sec = now->tv_sec;
++	ts.tv_nsec = now->tv_usec * 1000;
++
++	if (dev->fim_counter > 0) {
++		diff = timespec_sub(ts, dev->fim_last_ts);
++		interval = diff.tv_sec * 1000 * 1000 + diff.tv_nsec / 1000;
++		dev->fim_sum += interval;
++
++		if (dev->fim_counter == dev->fim_num_avg) {
++			interval_avg = DIV_ROUND_CLOSEST(dev->fim_sum,
++							 dev->fim_num_avg);
++
++			error = abs(interval_avg - dev->fim_nominal);
++
++			if (error > dev->fim_tolerance)
++				ret = -EIO;
++
++			dev_dbg(dev->dev, "FIM: %lu usec%s\n", interval_avg,
++				ret ? " (!!!)" : "");
++
++			dev->fim_counter = 0;
++			dev->fim_sum = 0;
++		}
++	}
++
++	dev->fim_last_ts = ts;
++
++	return ret;
++}
++
+ /*
+  * Turn current sensor and CSI streaming on/off according to stream_count.
+  */
+@@ -574,6 +683,8 @@ static int set_stream(struct mx6cam_ctx *ctx, bool on)
+ 		if (dev->preview_on)
+ 			stop_preview(dev);
+ 
++		reset_fim(dev, true);
++
+ 		/*
+ 		 * If there are two or more frames in the queue, we can start
+ 		 * the encoder now. Otherwise the encoding will start once
+@@ -760,6 +871,9 @@ static int mx6cam_s_ctrl(struct v4l2_ctrl *ctrl)
+ 	case V4L2_CID_IMX6_MOTION:
+ 		motion = ctrl->val;
+ 		return mx6cam_set_motion(dev, motion);
++	case V4L2_CID_IMX6_FIM_ENABLE:
++		reset_fim(dev, false);
++		return 0;
+ 	default:
+ 		v4l2_err(&dev->v4l2_dev, "Invalid control\n");
+ 		return -EINVAL;
+@@ -772,31 +886,122 @@ static const struct v4l2_ctrl_ops mx6cam_ctrl_ops = {
+ 	.s_ctrl = mx6cam_s_ctrl,
+ };
+ 
+-static const struct v4l2_ctrl_config motion_cfg = {
+-	.ops = &mx6cam_ctrl_ops,
+-	.id = V4L2_CID_IMX6_MOTION,
+-	.name = "Motion Compensation",
+-	.type = V4L2_CTRL_TYPE_INTEGER,
+-	.def = MOTION_NONE,
+-	.min = MOTION_NONE,
+-	.max = HIGH_MOTION,
+-	.step = 1,
++static const struct v4l2_ctrl_config mx6cam_std_ctrl[] = {
++	{
++		.id = V4L2_CID_HFLIP,
++		.name = "Horizontal Flip",
++		.type = V4L2_CTRL_TYPE_BOOLEAN,
++		.def =  0,
++		.min =  0,
++		.max =  1,
++		.step = 1,
++	}, {
++		.id = V4L2_CID_VFLIP,
++		.name = "Vertical Flip",
++		.type = V4L2_CTRL_TYPE_BOOLEAN,
++		.def =  0,
++		.min =  0,
++		.max =  1,
++		.step = 1,
++	}, {
++		.id = V4L2_CID_ROTATE,
++		.name = "Rotation",
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.def =   0,
++		.min =   0,
++		.max = 270,
++		.step = 90,
++	},
+ };
++#define MX6CAM_NUM_STD_CONTROLS ARRAY_SIZE(mx6cam_std_ctrl)
++
++static const struct v4l2_ctrl_config mx6cam_custom_ctrl[] = {
++	{
++		.ops = &mx6cam_ctrl_ops,
++		.id = V4L2_CID_IMX6_MOTION,
++		.name = "Motion Compensation",
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.def = MOTION_NONE,
++		.min = MOTION_NONE,
++		.max = HIGH_MOTION,
++		.step = 1,
++	},
++};
++#define MX6CAM_NUM_CUSTOM_CONTROLS ARRAY_SIZE(mx6cam_custom_ctrl)
++
++static const struct v4l2_ctrl_config mx6cam_fim_ctrl[] = {
++	[FIM_CL_ENABLE] = {
++		.ops = &mx6cam_ctrl_ops,
++		.id = V4L2_CID_IMX6_FIM_ENABLE,
++		.name = "FIM Enable",
++		.type = V4L2_CTRL_TYPE_BOOLEAN,
++		.def = 0,
++		.min = 0,
++		.max = 1,
++		.step = 1,
++	},
++	[FIM_CL_NUM] = {
++		.ops = &mx6cam_ctrl_ops,
++		.id = V4L2_CID_IMX6_FIM_NUM,
++		.name = "FIM Num Average",
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.def =  8, /* average 8 frames */
++		.min =  1, /* no averaging */
++		.max = 64, /* average 64 frames */
++		.step = 1,
++	},
++	[FIM_CL_TOLERANCE] = {
++		.ops = &mx6cam_ctrl_ops,
++		.id = V4L2_CID_IMX6_FIM_TOLERANCE,
++		.name = "FIM Tolerance",
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.def =   50, /* usec */
++		.min =    2,
++		.max =  200,
++		.step =   1,
++	},
++	[FIM_CL_NUM_SKIP] = {
++		.ops = &mx6cam_ctrl_ops,
++		.id = V4L2_CID_IMX6_FIM_NUM_SKIP,
++		.name = "FIM Num Skip",
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.def =   8, /* skip 8 frames after restart */
++		.min =   1, /* skip 1 frame */
++		.max = 256, /* skip 256 frames */
++		.step =  1,
++	},
++};
++
++#define MX6CAM_NUM_CONTROLS (MX6CAM_NUM_STD_CONTROLS    + \
++			     MX6CAM_NUM_CUSTOM_CONTROLS + \
++			     FIM_NUM_CONTROLS)
+ 
+ static int mx6cam_init_controls(struct mx6cam_dev *dev)
+ {
+ 	struct v4l2_ctrl_handler *hdlr = &dev->ctrl_hdlr;
+-	int ret;
++	const struct v4l2_ctrl_config *c;
++	int i, ret;
++
++	v4l2_ctrl_handler_init(hdlr, MX6CAM_NUM_CONTROLS);
++
++	for (i = 0; i < MX6CAM_NUM_STD_CONTROLS; i++) {
++		c = &mx6cam_std_ctrl[i];
++
++		v4l2_ctrl_new_std(hdlr, &mx6cam_ctrl_ops,
++				  c->id, c->min, c->max, c->step, c->def);
++	}
++
++	for (i = 0; i < MX6CAM_NUM_CUSTOM_CONTROLS; i++) {
++		c = &mx6cam_custom_ctrl[i];
+ 
+-	v4l2_ctrl_handler_init(hdlr, 4);
++		v4l2_ctrl_new_custom(hdlr, c, NULL);
++	}
+ 
+-	v4l2_ctrl_new_std(hdlr, &mx6cam_ctrl_ops, V4L2_CID_HFLIP,
+-			  0, 1, 1, 0);
+-	v4l2_ctrl_new_std(hdlr, &mx6cam_ctrl_ops, V4L2_CID_VFLIP,
+-			  0, 1, 1, 0);
+-	v4l2_ctrl_new_std(hdlr, &mx6cam_ctrl_ops, V4L2_CID_ROTATE,
+-			  0, 270, 90, 0);
+-	v4l2_ctrl_new_custom(hdlr, &motion_cfg, NULL);
++	for (i = 0; i < FIM_NUM_CONTROLS; i++) {
++		c = &mx6cam_fim_ctrl[i];
++
++		dev->fim_ctrl[i] = v4l2_ctrl_new_custom(hdlr, c, NULL);
++	}
+ 
+ 	if (hdlr->error) {
+ 		ret = hdlr->error;
+@@ -804,6 +1009,8 @@ static int mx6cam_init_controls(struct mx6cam_dev *dev)
+ 		return ret;
+ 	}
+ 
++	v4l2_ctrl_cluster(FIM_NUM_CONTROLS, dev->fim_ctrl);
++
+ 	dev->v4l2_dev.ctrl_handler = hdlr;
+ 	dev->vfd->ctrl_handler = hdlr;
+ 
+@@ -1538,9 +1745,12 @@ static int vidioc_overlay(struct file *file, void *priv,
+ 			return -EINVAL;
+ 		}
+ 
+-		/* make sure to set these booleans in case of preview only */
+-		dev->using_ic = true;
+-		dev->using_vdic = false;
++		/* make sure to set these in case of preview only */
++		if (!vb2_is_streaming(&dev->buffer_queue)) {
++			dev->using_ic = true;
++			dev->using_vdic = false;
++			reset_fim(dev, true);
++		}
+ 
+ 		ret = start_preview(dev);
+ 		if (!ret)
+@@ -1943,6 +2153,7 @@ static void mx6cam_subdev_notification(struct v4l2_subdev *sd,
+ 
+ 	switch (notification) {
+ 	case MX6CAM_NFB4EOF_NOTIFY:
++	case MX6CAM_FRAME_INTERVAL_NOTIFY:
+ 		if (ctx && !ctx->stop)
+ 			mod_timer(&ctx->restart_timer, jiffies +
+ 				  msecs_to_jiffies(MX6CAM_RESTART_DELAY));
+@@ -2009,6 +2220,11 @@ static int mx6cam_add_sensor(struct mx6cam_dev *dev,
+ 
+ 	v4l2_info(&dev->v4l2_dev, "Registered sensor subdev %s on CSI%d\n",
+ 		  ep->sd->name, ep->ep.base.port);
++
++	/* if this is the ADV718x decoder, turn on FIM by default */
++	if (strncasecmp(ep->sd->name, "adv718", 6) == 0)
++		v4l2_ctrl_s_ctrl(dev->fim_ctrl[FIM_CL_ENABLE], 1);
++
+ 	ret = 0;
+ 
+ mod_put:
+@@ -2425,6 +2641,7 @@ static int mx6cam_probe(struct platform_device *pdev)
+ 	}
+ 
+ 	dev->sensor_set_stream = sensor_set_stream;
++	dev->fim = frame_interval_monitor;
+ 
+ 	/* find and register mipi csi2 receiver subdev */
+ 	ret = mx6cam_add_csi2_receiver(dev);
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.h b/drivers/staging/media/imx6/capture/mx6-camif.h
+index e706801..01faab7 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.h
++++ b/drivers/staging/media/imx6/capture/mx6-camif.h
+@@ -39,8 +39,20 @@
+ /*
+  * Internal subdev notifications
+  */
+-#define MX6CAM_NFB4EOF_NOTIFY      _IO('6', 0)
+-#define MX6CAM_EOF_TIMEOUT_NOTIFY  _IO('6', 1)
++#define MX6CAM_NFB4EOF_NOTIFY         _IO('6', 0)
++#define MX6CAM_EOF_TIMEOUT_NOTIFY     _IO('6', 1)
++#define MX6CAM_FRAME_INTERVAL_NOTIFY  _IO('6', 2)
++
++/*
++ * Frame Interval Monitor Control Indexes
++ */
++enum {
++	FIM_CL_ENABLE = 0,
++	FIM_CL_NUM,
++	FIM_CL_TOLERANCE,
++	FIM_CL_NUM_SKIP,
++	FIM_NUM_CONTROLS,
++};
+ 
+ struct mx6cam_buffer {
+ 	struct vb2_buffer vb; /* v4l buffer must be first */
+@@ -121,6 +133,19 @@ struct mx6cam_dev {
+ 	bool                     vflip;
+ 	enum ipu_motion_sel      motion;
+ 
++	/* frame interval monitor control cluster */
++	struct v4l2_ctrl         *fim_ctrl[FIM_NUM_CONTROLS];
++	bool                     fim_enabled;
++	int                      fim_num_avg;
++	int                      fim_num_skip;
++	unsigned long            fim_tolerance; /* usec */
++
++	/* used by the frame interval monitor */
++	int                     fim_counter;
++	struct timespec         fim_last_ts;
++	unsigned long           fim_sum;     /* usec */
++	unsigned long           fim_nominal; /* usec */
++
+ 	/* derived from rotation, hflip, vflip controls */
+ 	enum ipu_rotate_mode     rot_mode;
+ 
+@@ -132,6 +157,7 @@ struct mx6cam_dev {
+ 	struct v4l2_format        user_fmt;
+ 	struct mx6cam_pixfmt      *user_pixfmt;
+ 	struct v4l2_mbus_framefmt sensor_fmt;
++	struct v4l2_fract         sensor_tpf;
+ 	struct mx6cam_pixfmt      *sensor_pixfmt;
+ 	struct v4l2_mbus_config   mbus_cfg;
+ 
+@@ -177,6 +203,7 @@ struct mx6cam_dev {
+ 	int                     num_eps;
+ 
+ 	int (*sensor_set_stream)(struct mx6cam_dev *dev, int on);
++	int (*fim)(struct mx6cam_dev *dev, struct timeval *now);
+ 
+ 	/*
+ 	 * the current open context that is doing IO (there can only
+diff --git a/drivers/staging/media/imx6/capture/mx6-encode.c b/drivers/staging/media/imx6/capture/mx6-encode.c
+index 40c2f83..2b346ba 100644
+--- a/drivers/staging/media/imx6/capture/mx6-encode.c
++++ b/drivers/staging/media/imx6/capture/mx6-encode.c
+@@ -166,10 +166,11 @@ static irqreturn_t encoder_eof_interrupt(int irq, void *dev_id)
+ 
+ 	spin_lock_irqsave(&dev->irqlock, flags);
+ 
++	do_gettimeofday(&cur_time);
++
+ 	/* timestamp and return the completed frame */
+ 	frame = priv->active_frame[priv->buf_num];
+ 	if (frame) {
+-		do_gettimeofday(&cur_time);
+ 		frame->vb.v4l2_buf.timestamp = cur_time;
+ 		state = dev->signal_locked ?
+ 			VB2_BUF_STATE_DONE : VB2_BUF_STATE_ERROR;
+@@ -183,6 +184,10 @@ static irqreturn_t encoder_eof_interrupt(int irq, void *dev_id)
+ 		goto unlock;
+ 	}
+ 
++	if (dev->fim(dev, &cur_time))
++		v4l2_subdev_notify(&priv->sd, MX6CAM_FRAME_INTERVAL_NOTIFY,
++				   NULL);
++
+ 	/* bump the EOF timeout timer */
+ 	mod_timer(&priv->eof_timeout_timer,
+ 		  jiffies + msecs_to_jiffies(MX6CAM_EOF_TIMEOUT));
+diff --git a/drivers/staging/media/imx6/capture/mx6-preview.c b/drivers/staging/media/imx6/capture/mx6-preview.c
+index 5ce8f49..4110ce4 100644
+--- a/drivers/staging/media/imx6/capture/mx6-preview.c
++++ b/drivers/staging/media/imx6/capture/mx6-preview.c
+@@ -238,16 +238,23 @@ static irqreturn_t preview_eof_interrupt(int irq, void *dev_id)
+ {
+ 	struct preview_priv *priv = dev_id;
+ 	struct mx6cam_dev *dev = priv->dev;
++	struct timeval cur_time;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&dev->irqlock, flags);
+ 
++	do_gettimeofday(&cur_time);
++
+ 	if (priv->last_eof) {
+ 		complete(&priv->last_eof_comp);
+ 		priv->last_eof = false;
+ 		goto unlock;
+ 	}
+ 
++	if (dev->fim(dev, &cur_time))
++		v4l2_subdev_notify(&priv->sd,
++				   MX6CAM_FRAME_INTERVAL_NOTIFY, NULL);
++
+ 	/* bump the EOF timeout timer */
+ 	mod_timer(&priv->eof_timeout_timer,
+ 		  jiffies + msecs_to_jiffies(MX6CAM_EOF_TIMEOUT));
+diff --git a/drivers/staging/media/imx6/capture/mx6-vdic.c b/drivers/staging/media/imx6/capture/mx6-vdic.c
+index fc8adaa..15d76d4 100644
+--- a/drivers/staging/media/imx6/capture/mx6-vdic.c
++++ b/drivers/staging/media/imx6/capture/mx6-vdic.c
+@@ -331,10 +331,11 @@ static irqreturn_t prpvf_out_eof_interrupt(int irq, void *dev_id)
+ 
+ 	spin_lock_irqsave(&dev->irqlock, flags);
+ 
++	do_gettimeofday(&cur_time);
++
+ 	/* timestamp and return the completed frame */
+ 	frame = priv->active_frame[priv->out_buf_num];
+ 	if (frame) {
+-		do_gettimeofday(&cur_time);
+ 		frame->vb.v4l2_buf.timestamp = cur_time;
+ 		state = dev->signal_locked ?
+ 			VB2_BUF_STATE_DONE : VB2_BUF_STATE_ERROR;
+@@ -356,8 +357,13 @@ static irqreturn_t prpvf_out_eof_interrupt(int irq, void *dev_id)
+ 		  jiffies + msecs_to_jiffies(MX6CAM_EOF_TIMEOUT));
+ 
+ 	prepare_prpvf_out_buffer(priv);
++
+ flip:
+ 	priv->out_buf_num ^= 1;
++
++	if (dev->fim(dev, &cur_time))
++		v4l2_subdev_notify(&priv->sd, MX6CAM_FRAME_INTERVAL_NOTIFY,
++				   NULL);
+ unlock:
+ 	spin_unlock_irqrestore(&dev->irqlock, flags);
+ 	return IRQ_HANDLED;
+diff --git a/include/media/imx6.h b/include/media/imx6.h
+index 5fc279a..c2857b4 100644
+--- a/include/media/imx6.h
++++ b/include/media/imx6.h
+@@ -12,6 +12,10 @@
+ 
+ enum imx6_ctrl_id {
+ 	V4L2_CID_IMX6_MOTION = (V4L2_CID_USER_IMX6_BASE + 0),
++	V4L2_CID_IMX6_FIM_ENABLE,
++	V4L2_CID_IMX6_FIM_NUM,
++	V4L2_CID_IMX6_FIM_TOLERANCE,
++	V4L2_CID_IMX6_FIM_NUM_SKIP,
+ };
+ 
+ enum adv718x_ctrl_id {
+-- 
+2.4.10
+

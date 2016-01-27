@@ -1,0 +1,107 @@
+From da75e514f07d04e2ad65b4bf7c52b64469d86b23 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Tue, 11 Aug 2015 17:18:16 -0700
+Subject: [PATCH 657/668] media: imx6 camera: power on mipi csi-2 before sensor
+
+The Synopsys MIPI CSI-2 receiver docs in the i.MX6 manual state
+that the receiver should be reset and initialized first, followed
+by the camera sensor. So change the order of sensor and receiver
+power-on, mipi-csi2 subdev should be powered on first followed by
+the sensor subdev.
+
+Also the receiver power-on is moved into sensor_set_power(), and
+the receiver is also powered down there as well. This is a change
+of behavior from before, where once powered on, the receiver was
+never powered down except at driver unload. This behavior was copied
+from Freescale's BSP mipi csi-2 driver, but power off of the receiver
+has been tested and works fine, that is, it powers back on at open
+time with no receiver ready timeouts. This also makes sensor_set_power()
+more symmetric with sensor_set_stream().
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c | 47 ++++++++++++++------------
+ 1 file changed, 26 insertions(+), 21 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index 6b1e4d3..7f1e88d 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -449,8 +449,32 @@ static int sensor_set_power(struct mx6cam_dev *dev, int on)
+ 	else if (!on && (ep->power_count == 0 || --ep->power_count > 0))
+ 		return 0;
+ 
+-	ret = v4l2_subdev_call(sd, core, s_power, on);
+-	return ret != -ENOIOCTLCMD ? ret : 0;
++	if (on) {
++		/* power-on the csi2 receiver */
++		if (ep->ep.bus_type == V4L2_MBUS_CSI2 && dev->csi2_sd) {
++			ret = v4l2_subdev_call(dev->csi2_sd, core, s_power,
++					       true);
++			if (ret)
++				goto out;
++		}
++
++		ret = v4l2_subdev_call(sd, core, s_power, true);
++		if (ret && ret != -ENOIOCTLCMD)
++			goto csi2_off;
++	} else {
++		v4l2_subdev_call(sd, core, s_power, false);
++		if (ep->ep.bus_type == V4L2_MBUS_CSI2 && dev->csi2_sd)
++			v4l2_subdev_call(dev->csi2_sd, core, s_power, false);
++	}
++
++	return 0;
++
++csi2_off:
++	if (ep->ep.bus_type == V4L2_MBUS_CSI2 && dev->csi2_sd)
++		v4l2_subdev_call(dev->csi2_sd, core, s_power, false);
++out:
++	ep->power_count--;
++	return ret;
+ }
+ 
+ static void reset_fim(struct mx6cam_dev *dev, bool curval)
+@@ -1408,15 +1432,6 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int index)
+ 		ret = sensor_set_power(dev, 1);
+ 		if (ret)
+ 			v4l2_warn(&dev->v4l2_dev, "sensor power on failed\n");
+-
+-		/* power-on the csi2 receiver */
+-		if (dev->ep->ep.bus_type == V4L2_MBUS_CSI2 && dev->csi2_sd) {
+-			ret = v4l2_subdev_call(dev->csi2_sd, core, s_power,
+-					       true);
+-			if (ret)
+-				v4l2_err(&dev->v4l2_dev,
+-					 "csi2 power on failed\n");
+-		}
+ 	}
+ 
+ 	/* finally select the sensor's input */
+@@ -2011,14 +2026,6 @@ static int mx6cam_open(struct file *file)
+ 		goto ctx_free;
+ 	}
+ 
+-	if (dev->ep->ep.bus_type == V4L2_MBUS_CSI2 && dev->csi2_sd) {
+-		ret = v4l2_subdev_call(dev->csi2_sd, core, s_power, true);
+-		if (ret) {
+-			v4l2_err(&dev->v4l2_dev, "csi2 power on failed\n");
+-			goto sensor_off;
+-		}
+-	}
+-
+ 	/* update the sensor's current format */
+ 	update_sensor_fmt(dev);
+ 	/* and init crop window to default if needed */
+@@ -2028,8 +2035,6 @@ static int mx6cam_open(struct file *file)
+ 	mutex_unlock(&dev->mutex);
+ 	return 0;
+ 
+-sensor_off:
+-	sensor_set_power(dev, 0);
+ ctx_free:
+ 	v4l2_fh_del(&ctx->fh);
+ 	v4l2_fh_exit(&ctx->fh);
+-- 
+2.4.10
+

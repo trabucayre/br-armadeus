@@ -1,0 +1,17 @@
+Otherwise OTG controller accesses freeze at startup on APF51.
+
+Signed-off-by: Julien Boibessot <julien.boibessot@armadeus.com>
+
+Index: linux-4.4/drivers/clk/imx/clk-imx51-imx53.c
+===================================================================
+--- linux-4.4.orig/drivers/clk/imx/clk-imx51-imx53.c
++++ linux-4.4/drivers/clk/imx/clk-imx51-imx53.c
+@@ -308,7 +308,7 @@ static void __init mx5_clocks_common_ini
+ 	clk_set_parent(clk[IMX5_CLK_ESDHC_B_SEL], clk[IMX5_CLK_PLL2_SW]);
+ 
+ 	/* move usb phy clk to 24MHz */
+-	clk_set_parent(clk[IMX5_CLK_USB_PHY_SEL], clk[IMX5_CLK_OSC]);
++	/*clk_set_parent(clk[IMX5_CLK_USB_PHY_SEL], clk[IMX5_CLK_OSC]);*/
+ 
+ 	clk_prepare_enable(clk[IMX5_CLK_GPC_DVFS]);
+ 	clk_prepare_enable(clk[IMX5_CLK_AHB_MAX]); /* esdhc3 */

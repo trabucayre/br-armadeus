@@ -1,0 +1,146 @@
+From 12ba2eb4ac2458e5d8e6885e5b109702829c3435 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Wed, 10 Jun 2015 16:22:53 -0700
+Subject: [PATCH 645/668] media: imx6 camera: adv7180: Add Freerun controls
+
+Add custom controls to enable/disable freerun mode when there is
+no signal lock, to force freerun mode, and set the freerun Y/Cr/Cb
+values.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/adv7180.c | 87 ++++++++++++++++++++++++++++
+ include/media/imx6.h                         |  5 ++
+ 2 files changed, 92 insertions(+)
+
+diff --git a/drivers/staging/media/imx6/capture/adv7180.c b/drivers/staging/media/imx6/capture/adv7180.c
+index 16da552..40e4611 100644
+--- a/drivers/staging/media/imx6/capture/adv7180.c
++++ b/drivers/staging/media/imx6/capture/adv7180.c
+@@ -148,6 +148,16 @@ static struct video_fmt_t video_fmts[] = {
+ #define ADV7180_CONTRAST               0x08	/* Contrast */
+ #define ADV7180_BRIGHTNESS             0x0a	/* Brightness */
+ #define ADV7180_HUE_REG                0x0b	/* Signed, inverted */
++#define ADV7180_DEF_Y                  0x0c
++#define   ADV7180_DEF_VAL_EN           (1 << 0)
++#define   ADV7180_DEF_VAL_AUTO_EN      (1 << 1)
++#define   ADV7180_DEF_Y_BIT            2
++#define   ADV7180_DEF_Y_MASK           (0x3f << ADV7180_DEF_Y_BIT)
++#define ADV7180_DEF_C                  0x0d
++#define   ADV7180_DEF_CB_BIT           0
++#define   ADV7180_DEF_CB_MASK          (0xf << ADV7180_DEF_CB_BIT)
++#define   ADV7180_DEF_CR_BIT           4
++#define   ADV7180_DEF_CR_MASK          (0xf << ADV7180_DEF_CR_BIT)
+ #define ADV7180_ADI_CTL_1              0x0e
+ #define ADV7180_PWR_MNG                0x0f     /* Power Management */
+ #define ADV7180_IDENT                  0x11	/* IDENT */
+@@ -787,6 +797,38 @@ static int adv7180_s_ctrl(struct v4l2_ctrl *ctrl)
+ 		tmp = ctrl->val + 128;
+ 		ADV7180_WRITE_REG(sensor, ADV7180_SD_OFFSET_CB, tmp);
+ 		break;
++	case V4L2_CID_ADV718x_FREERUN_ENABLE:
++		ADV7180_READ_REG(sensor, ADV7180_DEF_Y, &tmp);
++		tmp &= ~ADV7180_DEF_VAL_AUTO_EN;
++		if (ctrl->val)
++			tmp |= ADV7180_DEF_VAL_AUTO_EN;
++		ADV7180_WRITE_REG(sensor, ADV7180_DEF_Y, tmp);
++		break;
++	case V4L2_CID_ADV718x_FORCE_FREERUN:
++		ADV7180_READ_REG(sensor, ADV7180_DEF_Y, &tmp);
++		tmp &= ~ADV7180_DEF_VAL_EN;
++		if (ctrl->val)
++			tmp |= ADV7180_DEF_VAL_EN;
++		ADV7180_WRITE_REG(sensor, ADV7180_DEF_Y, tmp);
++		break;
++	case V4L2_CID_ADV718x_FREERUN_Y:
++		ADV7180_READ_REG(sensor, ADV7180_DEF_Y, &tmp);
++		tmp &= ~ADV7180_DEF_Y_MASK;
++		tmp |= (ctrl->val << ADV7180_DEF_Y_BIT);
++		ADV7180_WRITE_REG(sensor, ADV7180_DEF_Y, tmp);
++		break;
++	case V4L2_CID_ADV718x_FREERUN_CB:
++		ADV7180_READ_REG(sensor, ADV7180_DEF_C, &tmp);
++		tmp &= ~ADV7180_DEF_CB_MASK;
++		tmp |= (ctrl->val << ADV7180_DEF_CB_BIT);
++		ADV7180_WRITE_REG(sensor, ADV7180_DEF_C, tmp);
++		break;
++	case V4L2_CID_ADV718x_FREERUN_CR:
++		ADV7180_READ_REG(sensor, ADV7180_DEF_C, &tmp);
++		tmp &= ~ADV7180_DEF_CR_MASK;
++		tmp |= (ctrl->val << ADV7180_DEF_CR_BIT);
++		ADV7180_WRITE_REG(sensor, ADV7180_DEF_C, tmp);
++		break;
+ 	default:
+ 		ret = -EPERM;
+ 		break;
+@@ -857,6 +899,51 @@ static const struct v4l2_ctrl_config adv7180_custom_ctrl[] = {
+ 		.min = -128, /* −312 mV offset applied to the Cb channel */
+ 		.max =  127, /* +312 mV offset applied to the Cb channel */
+ 		.step =   1,
++	}, {
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_FREERUN_ENABLE,
++		.type = V4L2_CTRL_TYPE_BOOLEAN,
++		.name = "Freerun Enable",
++		.def =  1,
++		.min =  0,
++		.max =  1,
++		.step = 1,
++	}, {
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_FORCE_FREERUN,
++		.type = V4L2_CTRL_TYPE_BOOLEAN,
++		.name = "Force Freerun",
++		.def =  0,
++		.min =  0,
++		.max =  1,
++		.step = 1,
++	}, {
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_FREERUN_Y,
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.name = "Freerun Y",
++		.def =  13,
++		.min =   0,
++		.max =  63,
++		.step =  1,
++	}, {
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_FREERUN_CB,
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.name = "Freerun Cb",
++		.def =  12,
++		.min =   0,
++		.max =  15,
++		.step =  1,
++	}, {
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_FREERUN_CR,
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.name = "Freerun Cr",
++		.def =   7,
++		.min =   0,
++		.max =  15,
++		.step =  1,
+ 	},
+ };
+ #define ADV7180_NUM_CUSTOM_CONTROLS ARRAY_SIZE(adv7180_custom_ctrl)
+diff --git a/include/media/imx6.h b/include/media/imx6.h
+index e57eb22..ad02ace 100644
+--- a/include/media/imx6.h
++++ b/include/media/imx6.h
+@@ -17,6 +17,11 @@ enum imx6_ctrl_id {
+ enum adv718x_ctrl_id {
+ 	V4L2_CID_ADV718x_OFF_CB = (V4L2_CID_USER_ADV718X_BASE + 0),
+ 	V4L2_CID_ADV718x_OFF_CR,
++	V4L2_CID_ADV718x_FREERUN_ENABLE,
++	V4L2_CID_ADV718x_FORCE_FREERUN,
++	V4L2_CID_ADV718x_FREERUN_Y,
++	V4L2_CID_ADV718x_FREERUN_CB,
++	V4L2_CID_ADV718x_FREERUN_CR,
+ };
+ 
+ /*
+-- 
+2.4.10
+

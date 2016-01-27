@@ -1,0 +1,111 @@
+From dbf19264703d3aa8de03dd31eb4d3c167cb18adc Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Mon, 16 Mar 2015 15:46:50 -0700
+Subject: [PATCH 628/668] media: imx6 camera: adv7180: Add more register
+ defines
+
+Add more register definitions, and use them in place of hard-coded
+values. No functional changes.
+
+Port of linux-meibp 9192c098933c3adaa4baa632f06cf595681b5be0.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/adv7180.c | 28 ++++++++++++++++++++++------
+ 1 file changed, 22 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/adv7180.c b/drivers/staging/media/imx6/capture/adv7180.c
+index 93de9e1..c077d00 100644
+--- a/drivers/staging/media/imx6/capture/adv7180.c
++++ b/drivers/staging/media/imx6/capture/adv7180.c
+@@ -137,7 +137,10 @@ static struct video_fmt_t video_fmts[] = {
+ };
+ 
+ #define IF_NAME                    "adv7180"
++
++/* Main Register Map */
+ #define ADV7180_INPUT_CTL              0x00	/* Input Control */
++#define ADV7180_EXT_OUT_CTL            0x04
+ #define ADV7180_STATUS_1               0x10	/* Status #1 */
+ #define   ADV7180_IN_LOCK              (1 << 0)
+ #define   ADV7180_LOST_LOCK            (1 << 1)
+@@ -155,25 +158,38 @@ static struct video_fmt_t video_fmts[] = {
+ #define ADV7180_CONTRAST               0x08	/* Contrast */
+ #define ADV7180_BRIGHTNESS             0x0a	/* Brightness */
+ #define ADV7180_HUE_REG                0x0b	/* Signed, inverted */
++#define ADV7180_ADI_CTL_1              0x0e
++#define ADV7180_PWR_MNG                0x0f     /* Power Management */
+ #define ADV7180_IDENT                  0x11	/* IDENT */
++#define ADV7180_ANALOG_CLAMP_CTL       0x14
++#define ADV7180_SHAP_FILTER_CTL_1      0x17
+ #define ADV7180_VSYNC_FIELD_CTL_1      0x31	/* VSYNC Field Control #1 */
+-#define ADV7180_MANUAL_WIN_CTL         0x3d	/* Manual Window Control */
++#define ADV7180_MANUAL_WIN_CTL_1       0x3d	/* Manual Window Control 1 */
++#define ADV7180_MANUAL_WIN_CTL_2       0x3e     /* Manual Window Control 2 */
++#define ADV7180_MANUAL_WIN_CTL_3       0x3f     /* Manual Window Control 3 */
++#define ADV7180_LOCK_COUNT             0x51
++#define ADV7180_CVBS_TRIM              0x52
+ #define ADV7180_SD_SATURATION_CB       0xe3	/* SD Saturation Cb */
+ #define ADV7180_SD_SATURATION_CR       0xe4	/* SD Saturation Cr */
+-#define ADV7180_PWR_MNG                0x0f     /* Power Management */
++#define ADV7180_DRIVE_STRENGTH         0xf4
++/* Interrupt Register Map */
+ #define ADV7180_INT_CONFIG_1           0x40     /* Interrupt Config 1 */
+ #define ADV7180_INT_STATUS_1           0x42     /* Interrupt Status 1 (r/o) */
+ #define   ADV7180_INT_SD_LOCK          (1 << 0)
+ #define   ADV7180_INT_SD_UNLOCK        (1 << 1)
+ #define ADV7180_INT_CLEAR_1            0x43     /* Interrupt Clear 1 (w/o) */
+ #define ADV7180_INT_MASK_1             0x44     /* Interrupt Mask 1 */
++#define ADV7180_INT_RAW_STATUS_2       0x45   /* Interrupt Raw Status 2 (r/o) */
++#define  ADV7180_INT_SD_FIELD          (1 << 4)
+ #define ADV7180_INT_STATUS_2           0x46     /* Interrupt Status 2 (r/o) */
++#define  ADV7180_INT_SD_FIELD_CHNG     (1 << 4)
+ #define ADV7180_INT_CLEAR_2            0x47     /* Interrupt Clear 2 (w/o) */
+ #define ADV7180_INT_MASK_2             0x48     /* Interrupt Mask 2 */
+ #define ADV7180_INT_RAW_STATUS_3       0x49   /* Interrupt Raw Status 3 (r/o) */
+ #define   ADV7180_INT_SD_V_LOCK        (1 << 1)
+ #define ADV7180_INT_STATUS_3           0x4a   /* Interrupt Status 3 (r/o) */
+ #define   ADV7180_INT_SD_V_LOCK_CHNG   (1 << 1)
++#define   ADV7180_INT_SD_H_LOCK_CHNG   (1 << 2)
+ #define   ADV7180_INT_SD_AD_CHNG       (1 << 3)
+ #define ADV7180_INT_CLEAR_3            0x4b     /* Interrupt Clear 3 (w/o) */
+ #define ADV7180_INT_MASK_3             0x4c     /* Interrupt Mask 3 */
+@@ -470,7 +486,7 @@ static int adv7180_update_lock_status(struct adv7180_dev *sensor,
+ 	int ret;
+ 
+ 	/* Switch to interrupt register map */
+-	ADV7180_WRITE_REG(sensor, 0x0E, 0x20);
++	ADV7180_WRITE_REG(sensor, ADV7180_ADI_CTL_1, 0x20);
+ 
+ 	ADV7180_READ_REG(sensor, ADV7180_INT_STATUS_1, &int_stat1);
+ 	ADV7180_READ_REG(sensor, ADV7180_INT_STATUS_3, &int_stat3);
+@@ -481,7 +497,7 @@ static int adv7180_update_lock_status(struct adv7180_dev *sensor,
+ 	ADV7180_READ_REG(sensor, ADV7180_INT_RAW_STATUS_3, &int_raw_stat3);
+ 
+ 	/* Switch back to normal register map */
+-	ADV7180_WRITE_REG(sensor, 0x0E, 0x00);
++	ADV7180_WRITE_REG(sensor, ADV7180_ADI_CTL_1, 0x00);
+ 
+ 	*status_change = (((stat1 & ADV7180_LOST_LOCK) ||
+ 			   (int_stat1 & ADV7180_INT_SD_LOCK) ||
+@@ -1139,7 +1155,7 @@ static int adv7180_enable_interrupts(struct adv7180_dev *sensor)
+ 	int ret;
+ 
+ 	/* Switch to interrupt register map */
+-	ADV7180_WRITE_REG(sensor, 0x0E, 0x20);
++	ADV7180_WRITE_REG(sensor, ADV7180_ADI_CTL_1, 0x20);
+ 	/* INTRQ active low, active until cleared */
+ 	ADV7180_WRITE_REG(sensor, ADV7180_INT_CONFIG_1, 0xd1);
+ 	/* unmask SD_UNLOCK and SD_LOCK */
+@@ -1149,7 +1165,7 @@ static int adv7180_enable_interrupts(struct adv7180_dev *sensor)
+ 	ADV7180_WRITE_REG(sensor, ADV7180_INT_MASK_3,
+ 			  ADV7180_INT_SD_AD_CHNG | ADV7180_INT_SD_V_LOCK_CHNG);
+ 	/* Switch back to normal register map */
+-	ADV7180_WRITE_REG(sensor, 0x0E, 0x00);
++	ADV7180_WRITE_REG(sensor, ADV7180_ADI_CTL_1, 0x00);
+ 
+ 	return 0;
+ }
+-- 
+2.4.10
+

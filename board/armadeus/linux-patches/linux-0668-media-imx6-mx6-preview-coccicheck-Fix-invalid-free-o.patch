@@ -1,0 +1,30 @@
+From 1a859685f6d7a0cf9f8849bf425091b5d674e7f8 Mon Sep 17 00:00:00 2001
+From: "George G. Davis" <george_davis@mentor.com>
+Date: Fri, 2 Oct 2015 15:11:57 -0400
+Subject: [PATCH 668/668] media: imx6: mx6-preview: coccicheck: Fix "invalid
+ free of devm_ allocated data"
+
+Signed-off-by: George G. Davis <george_davis@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-preview.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-preview.c b/drivers/staging/media/imx6/capture/mx6-preview.c
+index 91a21b2..a316e3c 100644
+--- a/drivers/staging/media/imx6/capture/mx6-preview.c
++++ b/drivers/staging/media/imx6/capture/mx6-preview.c
+@@ -793,10 +793,8 @@ struct v4l2_subdev *mx6cam_preview_init(struct mx6cam_dev *dev)
+ 	priv->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
+ 
+ 	ret = preview_setup_controls(priv);
+-	if (ret) {
+-		kfree(priv);
++	if (ret)
+ 		return ERR_PTR(ret);
+-	}
+ 
+ 	priv->dev = dev;
+ 	return &priv->sd;
+-- 
+2.4.10
+

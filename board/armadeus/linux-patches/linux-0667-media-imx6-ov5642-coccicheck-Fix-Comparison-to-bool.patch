@@ -1,0 +1,27 @@
+From 788a070ea43fe82356a392d81138e61ccbcc895d Mon Sep 17 00:00:00 2001
+From: "George G. Davis" <george_davis@mentor.com>
+Date: Fri, 2 Oct 2015 15:08:46 -0400
+Subject: [PATCH 667/668] media: imx6: ov5642: coccicheck: Fix "Comparison to
+ bool"
+
+Signed-off-by: George G. Davis <george_davis@mentor.com>
+---
+ drivers/staging/media/imx6/capture/ov5642.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/staging/media/imx6/capture/ov5642.c b/drivers/staging/media/imx6/capture/ov5642.c
+index 94ea4bc..a0203a0 100644
+--- a/drivers/staging/media/imx6/capture/ov5642.c
++++ b/drivers/staging/media/imx6/capture/ov5642.c
+@@ -3342,7 +3342,7 @@ static int ov5642_write_snapshot_para(struct ov5642_dev *sensor,
+ 		return ret;
+ 
+ 	OV5642_READ_REG16(sensor, 0x380e, &capture_maxlines);
+-	if (m_60Hz == true)
++	if (m_60Hz)
+ 		lines_10ms = capture_frame_rate * (u32)capture_maxlines/12000;
+ 	else
+ 		lines_10ms = capture_frame_rate * (u32)capture_maxlines/10000;
+-- 
+2.4.10
+

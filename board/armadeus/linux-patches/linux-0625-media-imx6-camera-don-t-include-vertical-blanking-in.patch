@@ -1,0 +1,44 @@
+From d89df0ad00add3b2a0e0ab659fb4379d0b53e7d0 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Fri, 13 Mar 2015 15:46:08 -0700
+Subject: [PATCH 625/668] media: imx6 camera: don't include vertical blanking
+ in defrect
+
+The crop bounds and default rectangle were being set to the raw
+sensor frame. For the ADV718x this includes the vertical blanking
+lines, which should not be included in the crop windows.
+
+Fix by setting the default rectangle to the crop window returned
+by the ADV718x, which does not include the vertical blanking. Crop
+bounds is then the default rectangle plus any X/Y offsets.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index 31df1e0..23d03e8 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -393,11 +393,13 @@ static int update_sensor_fmt(struct mx6cam_dev *dev)
+ 
+ 	dev->sensor_pixfmt = mx6cam_get_format(0, dev->sensor_fmt.code);
+ 
+-	/* update sensor crop bounds */
++	/* update sensor default crop window and crop bounds */
++	calc_default_crop(dev, &dev->crop_defrect, &dev->sensor_fmt);
+ 	dev->crop_bounds.top = dev->crop_bounds.left = 0;
+-	dev->crop_bounds.width = dev->sensor_fmt.width;
+-	dev->crop_bounds.height = dev->sensor_fmt.height;
+-	dev->crop_defrect = dev->crop_bounds;
++	dev->crop_bounds.width =
++		dev->crop_defrect.width + dev->crop_defrect.left;
++	dev->crop_bounds.height =
++		dev->crop_defrect.height + dev->crop_defrect.top;
+ 
+ 	return 0;
+ }
+-- 
+2.4.10
+

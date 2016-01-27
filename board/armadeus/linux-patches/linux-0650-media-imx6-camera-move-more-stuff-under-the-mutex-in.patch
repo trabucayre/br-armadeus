@@ -1,0 +1,55 @@
+From 6386c3922bf58e77b9cca0249a1e187a7d78fb64 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Mon, 10 Aug 2015 17:23:16 -0700
+Subject: [PATCH 650/668] media: imx6 camera: move more stuff under the mutex
+ in mx6cam_release()
+
+Probably not really necessary, but move the calls to v4l2_fh_del(),
+v4l2_fh_exit(), and kfree(ctx) under the dev->mutex.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index fdc77d6..dd331a9 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -1806,11 +1806,11 @@ static int mx6cam_release(struct file *file)
+ 	unsigned long flags;
+ 	int ret = 0;
+ 
++	mutex_lock(&dev->mutex);
++
+ 	v4l2_fh_del(&ctx->fh);
+ 	v4l2_fh_exit(&ctx->fh);
+ 
+-	mutex_lock(&dev->mutex);
+-
+ 	if (is_io_ctx(ctx)) {
+ 		vb2_queue_release(&dev->buffer_queue);
+ 		vb2_dma_contig_cleanup_ctx(ctx->alloc_ctx);
+@@ -1827,16 +1827,16 @@ static int mx6cam_release(struct file *file)
+ 
+ 	if (dev->ep == NULL || dev->ep->sd == NULL) {
+ 		v4l2_warn(&dev->v4l2_dev, "lost the slave?\n");
+-		goto unlock;
++		goto free_ctx;
+ 	}
+ 
+ 	ret = sensor_set_power(dev, 0);
+ 	if (ret)
+ 		v4l2_err(&dev->v4l2_dev, "sensor power off failed\n");
+ 
+-unlock:
+-	mutex_unlock(&dev->mutex);
++free_ctx:
+ 	kfree(ctx);
++	mutex_unlock(&dev->mutex);
+ 	return ret;
+ }
+ 
+-- 
+2.4.10
+

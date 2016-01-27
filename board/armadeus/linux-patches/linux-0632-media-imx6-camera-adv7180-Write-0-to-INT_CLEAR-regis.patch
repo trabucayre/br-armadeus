@@ -1,0 +1,33 @@
+From c53c298684d79a60e668dcc861c113621be81271 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Mon, 16 Mar 2015 16:14:18 -0700
+Subject: [PATCH 632/668] media: imx6 camera: adv7180: Write 0 to INT_CLEAR
+ registers
+
+Analog Devices states that a zero must be written to the interrupt
+clear registers after clearing status bits, on the ADV7180.
+
+Port of linux-meibp 9530aa935fce325fdedb34f1eeb7f102a90b37d0.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/adv7180.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/staging/media/imx6/capture/adv7180.c b/drivers/staging/media/imx6/capture/adv7180.c
+index 8b57d93..8d239ab 100644
+--- a/drivers/staging/media/imx6/capture/adv7180.c
++++ b/drivers/staging/media/imx6/capture/adv7180.c
+@@ -594,7 +594,9 @@ static int adv7180_update_lock_status(struct adv7180_dev *sensor,
+ 
+ 	/* clear the interrupts */
+ 	ADV7180_WRITE_REG(sensor, ADV7180_INT_CLEAR_1, int_stat1);
++	ADV7180_WRITE_REG(sensor, ADV7180_INT_CLEAR_1, 0);
+ 	ADV7180_WRITE_REG(sensor, ADV7180_INT_CLEAR_3, int_stat3);
++	ADV7180_WRITE_REG(sensor, ADV7180_INT_CLEAR_3, 0);
+ 
+ 	ADV7180_READ_REG(sensor, ADV7180_INT_RAW_STATUS_3, &int_raw_stat3);
+ 
+-- 
+2.4.10
+

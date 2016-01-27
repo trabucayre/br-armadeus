@@ -1,0 +1,31 @@
+From cf15c35f65baec29422fdbdeb5fe63be47481923 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Wed, 2 Sep 2015 15:42:46 -0700
+Subject: [PATCH 660/668] media: imx6 camera: init sensor signal lock status at
+ open
+
+The sensor's current signal lock status was not getting initialized.
+Do this at open time by calling update_signal_lock_status().
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index 7f1e88d..d87ea4d 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -2026,7 +2026,8 @@ static int mx6cam_open(struct file *file)
+ 		goto ctx_free;
+ 	}
+ 
+-	/* update the sensor's current format */
++	/* update the sensor's current lock status and format */
++	update_signal_lock_status(dev);
+ 	update_sensor_fmt(dev);
+ 	/* and init crop window to default if needed */
+ 	if (!dev->crop.width || !dev->crop.height)
+-- 
+2.4.10
+

@@ -1,0 +1,33 @@
+From e45a3f3211c2631604f726cab14bc1430a125d9b Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Mon, 16 Mar 2015 16:21:04 -0700
+Subject: [PATCH 633/668] media: imx6 camera: adv7180: Reset Clamp Circuitry
+ after input switch
+
+Analog Devices states that clamp circuitry must be reset whenever
+the analog input is switched on ADV7180.
+
+Port of linux-meibp 1d6abbe2b8842b5c90dc6c7044cd3deaa65e490a.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/adv7180.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/staging/media/imx6/capture/adv7180.c b/drivers/staging/media/imx6/capture/adv7180.c
+index 8d239ab..0ee03f74 100644
+--- a/drivers/staging/media/imx6/capture/adv7180.c
++++ b/drivers/staging/media/imx6/capture/adv7180.c
+@@ -918,6 +918,9 @@ static int adv7180_s_routing(struct v4l2_subdev *sd, u32 input,
+ 
+ 	adv7180_write_reg(sensor, ADV7180_INPUT_CTL, advinput->insel);
+ 
++	/* ADI Required Write: Reset Clamp Circuitry */
++	adv7180_write_reg(sensor, ADV7180_ANALOG_CLAMP_CTL, 0x30);
++
+ 	sensor->current_input = input;
+ 
+ 	mutex_unlock(&sensor->mutex);
+-- 
+2.4.10
+

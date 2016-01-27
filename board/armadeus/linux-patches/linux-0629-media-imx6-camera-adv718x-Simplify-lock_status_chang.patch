@@ -1,0 +1,60 @@
+From 8d6e990a0ddb678e3cab03a8246020c53809b0b1 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Mon, 16 Mar 2015 15:56:09 -0700
+Subject: [PATCH 629/668] media: imx6 camera: adv718x: Simplify
+ lock_status_change calc
+
+In adv718x_update_lock_status(), use the int_mask registers
+to mask unused interrupt status bits. Set lock_status_change
+flag if any status bits are set after masking.
+
+Port of linux-meibp a55e5b275278b671ed3468fbeeb8e5369f4800fa.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/adv7180.c | 15 ++++++++++-----
+ 1 file changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/adv7180.c b/drivers/staging/media/imx6/capture/adv7180.c
+index c077d00..72f2422 100644
+--- a/drivers/staging/media/imx6/capture/adv7180.c
++++ b/drivers/staging/media/imx6/capture/adv7180.c
+@@ -483,13 +483,21 @@ static int adv7180_update_lock_status(struct adv7180_dev *sensor,
+ 				      u8 stat1, bool *status_change)
+ {
+ 	u8 int_stat1, int_stat3, int_raw_stat3;
++	u8 int_mask1, int_mask3;
+ 	int ret;
+ 
+ 	/* Switch to interrupt register map */
+ 	ADV7180_WRITE_REG(sensor, ADV7180_ADI_CTL_1, 0x20);
+ 
++	ADV7180_READ_REG(sensor, ADV7180_INT_MASK_1, &int_mask1);
++	ADV7180_READ_REG(sensor, ADV7180_INT_MASK_3, &int_mask3);
++
+ 	ADV7180_READ_REG(sensor, ADV7180_INT_STATUS_1, &int_stat1);
+ 	ADV7180_READ_REG(sensor, ADV7180_INT_STATUS_3, &int_stat3);
++
++	int_stat1 &= int_mask1;
++	int_stat3 &= int_mask3;
++
+ 	/* clear the interrupts */
+ 	ADV7180_WRITE_REG(sensor, ADV7180_INT_CLEAR_1, int_stat1);
+ 	ADV7180_WRITE_REG(sensor, ADV7180_INT_CLEAR_3, int_stat3);
+@@ -499,11 +507,8 @@ static int adv7180_update_lock_status(struct adv7180_dev *sensor,
+ 	/* Switch back to normal register map */
+ 	ADV7180_WRITE_REG(sensor, ADV7180_ADI_CTL_1, 0x00);
+ 
+-	*status_change = (((stat1 & ADV7180_LOST_LOCK) ||
+-			   (int_stat1 & ADV7180_INT_SD_LOCK) ||
+-			   (int_stat1 & ADV7180_INT_SD_UNLOCK) ||
+-			   (int_stat3 & ADV7180_INT_SD_V_LOCK_CHNG) ||
+-			   (int_stat3 & ADV7180_INT_SD_AD_CHNG)) != 0);
++	*status_change = ((stat1 & ADV7180_LOST_LOCK) || int_stat1 ||
++			  int_stat3);
+ 
+ 	sensor->locked = ((stat1 & ADV7180_IN_LOCK) &&
+ 			  (stat1 & ADV7180_FSC_LOCK) &&
+-- 
+2.4.10
+

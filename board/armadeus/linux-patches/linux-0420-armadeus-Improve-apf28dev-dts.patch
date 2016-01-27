@@ -1,0 +1,63 @@
+Remaining Armadeus tweaks for APF28Dev device tree.
+
+---
+Index: linux-4.4/arch/arm/boot/dts/imx28-apf28dev.dts
+===================================================================
+--- linux-4.4.orig/arch/arm/boot/dts/imx28-apf28dev.dts
++++ linux-4.4/arch/arm/boot/dts/imx28-apf28dev.dts
+@@ -83,16 +83,20 @@
+ 				pinctrl-names = "default";
+ 				pinctrl-0 = <&lcdif_16bit_pins_a
+ 						&lcdif_pins_apf28dev>;
+-				display = <&display0>;
++				display = <&st0700>;
++				/*
++				* To use the Tianma TM035 LCD comment the line above
++				* and uncomment the line below.
++				*/
++				//display = <&tm035>;
+ 				status = "okay";
+ 
+-				display0: display0 {
++				st0700: st0700 {
+ 					bits-per-pixel = <16>;
+ 					bus-width = <16>;
+ 
+ 					display-timings {
+-						native-mode = <&timing0>;
+-						timing0: timing0 {
++						timing {
+ 							clock-frequency = <33000033>;
+ 							hactive = <800>;
+ 							vactive = <480>;
+@@ -109,6 +113,30 @@
+ 						};
+ 					};
+ 				};
++
++				tm035: tm035 {
++					bits-per-pixel = <16>;
++					bus-width = <16>;
++					red-blue-fix;
++
++					display-timings {
++						timing {
++							clock-frequency = <28000000>;
++							hactive = <320>;
++							vactive = <240>;
++							hback-porch = <10>;
++							hfront-porch = <15>;
++							vback-porch = <9>;
++							vfront-porch = <4>;
++							hsync-len = <60>;
++							vsync-len = <4>;
++							hsync-active = <0>;
++							vsync-active = <0>;
++							de-active = <0>;
++							pixelclk-active = <1>;
++						};
++					};
++				};
+ 			};
+ 
+ 			can0: can@80032000 {

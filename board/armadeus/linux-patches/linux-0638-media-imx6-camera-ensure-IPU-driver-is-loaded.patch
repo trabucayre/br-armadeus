@@ -1,0 +1,132 @@
+From 6129ea628b974ab0e17f0fe7dadd6cad15630088 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Tue, 12 May 2015 17:45:18 -0700
+Subject: [PATCH 638/668] media: imx6 camera: ensure IPU driver is loaded
+
+When locating the bound IPU (formally mx6cam_find_ipu() and renamed
+mx6cam_get_ipu()), ensure the IPU driver is loaded with try_module_get().
+If not loaded yet return -EPROBE_DEFER to retry probe later.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c | 46 +++++++++++++++++++++-----
+ drivers/staging/media/imx6/capture/mx6-camif.h |  1 +
+ 2 files changed, 38 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index 38400f6..90455c6 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -2148,16 +2148,17 @@ static int of_dev_node_match(struct device *dev, void *data)
+ 	return dev->of_node == data;
+ }
+ 
+-static struct ipu_soc *mx6cam_find_ipu(struct mx6cam_dev *dev,
+-				       struct device_node *node)
++static struct ipu_soc *mx6cam_get_ipu(struct mx6cam_dev *dev,
++				      struct device_node *node)
+ {
+ 	struct device_node *ipu_node;
+ 	struct device *ipu_dev;
++	struct ipu_soc *ipu;
+ 
+ 	ipu_node = of_parse_phandle(node, "ipu", 0);
+ 	if (!ipu_node) {
+ 		v4l2_err(&dev->v4l2_dev, "missing ipu phandle!\n");
+-		return NULL;
++		return ERR_PTR(-EINVAL);
+ 	}
+ 
+ 	ipu_dev = bus_find_device(&platform_bus_type, NULL,
+@@ -2166,10 +2167,34 @@ static struct ipu_soc *mx6cam_find_ipu(struct mx6cam_dev *dev,
+ 
+ 	if (!ipu_dev) {
+ 		v4l2_err(&dev->v4l2_dev, "failed to find ipu device!\n");
+-		return NULL;
++		return ERR_PTR(-ENODEV);
+ 	}
+ 
+-	return dev_get_drvdata(ipu_dev);
++	device_lock(ipu_dev);
++
++	if (!ipu_dev->driver || !try_module_get(ipu_dev->driver->owner)) {
++		ipu = ERR_PTR(-EPROBE_DEFER);
++		v4l2_warn(&dev->v4l2_dev, "IPU driver not loaded\n");
++		device_unlock(ipu_dev);
++		goto dev_put;
++	}
++
++	dev->ipu_dev = ipu_dev;
++	ipu = dev_get_drvdata(ipu_dev);
++
++	device_unlock(ipu_dev);
++	return ipu;
++dev_put:
++	put_device(ipu_dev);
++	return ipu;
++}
++
++static void mx6cam_put_ipu(struct mx6cam_dev *dev)
++{
++	if (!IS_ERR_OR_NULL(dev->ipu_dev)) {
++		module_put(dev->ipu_dev->driver->owner);
++		put_device(dev->ipu_dev);
++	}
+ }
+ 
+ static int mx6cam_probe(struct platform_device *pdev)
+@@ -2203,10 +2228,10 @@ static int mx6cam_probe(struct platform_device *pdev)
+ 	dev->pdata = pdata;
+ 
+ 	/* get our IPU */
+-	dev->ipu = mx6cam_find_ipu(dev, node);
+-	if (IS_ERR_OR_NULL(dev->ipu)) {
++	dev->ipu = mx6cam_get_ipu(dev, node);
++	if (IS_ERR(dev->ipu)) {
+ 		v4l2_err(&dev->v4l2_dev, "could not get ipu\n");
+-		ret = -ENODEV;
++		ret = PTR_ERR(dev->ipu);
+ 		goto unreg_dev;
+ 	}
+ 
+@@ -2214,7 +2239,7 @@ static int mx6cam_probe(struct platform_device *pdev)
+ 	if (!vfd) {
+ 		v4l2_err(&dev->v4l2_dev, "Failed to allocate video device\n");
+ 		ret = -ENOMEM;
+-		goto unreg_dev;
++		goto put_ipu;
+ 	}
+ 
+ 	*vfd = mx6cam_videodev;
+@@ -2344,6 +2369,8 @@ free_ctrls:
+ 	v4l2_ctrl_handler_free(&dev->ctrl_hdlr);
+ unreg_vdev:
+ 	video_unregister_device(dev->vfd);
++put_ipu:
++	mx6cam_put_ipu(dev);
+ unreg_dev:
+ 	v4l2_device_unregister(&dev->v4l2_dev);
+ 	return ret;
+@@ -2355,6 +2382,7 @@ static int mx6cam_remove(struct platform_device *pdev)
+ 		(struct mx6cam_dev *)platform_get_drvdata(pdev);
+ 
+ 	v4l2_info(&dev->v4l2_dev, "Removing " DEVICE_NAME "\n");
++	mx6cam_put_ipu(dev);
+ 	v4l2_ctrl_handler_free(&dev->ctrl_hdlr);
+ 	video_unregister_device(dev->vfd);
+ 	mx6cam_unregister_subdevs(dev);
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.h b/drivers/staging/media/imx6/capture/mx6-camif.h
+index fa6ed03..36e6bb4 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.h
++++ b/drivers/staging/media/imx6/capture/mx6-camif.h
+@@ -183,6 +183,7 @@ struct mx6cam_dev {
+ 	 */
+ 	struct mx6cam_ctx       *io_ctx;
+ 
++	struct device           *ipu_dev;
+ 	struct ipu_soc          *ipu;
+ };
+ 
+-- 
+2.4.10
+

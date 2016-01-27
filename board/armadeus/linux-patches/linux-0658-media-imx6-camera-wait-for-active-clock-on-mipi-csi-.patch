@@ -1,0 +1,47 @@
+From 0f28d1e3e370ac528dc4caa0954eb5e74399d05a Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Tue, 11 Aug 2015 17:02:39 -0700
+Subject: [PATCH 658/668] media: imx6 camera: wait for active clock on mipi
+ csi-2 clock lane
+
+The Synopsys MIPI CSI-2 receiver docs in the i.MX6 manual state
+that it should be confirmed that the D-PHY is receiving a clock on
+the D-PHY clock lane after enabling the camera sensor to start
+transmitting a clock on the clock lane. So add a wait for the
+active clock bit in the CSI2_PHY_STATE register, to
+mx6csi2_dphy_wait().
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mipi-csi2.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/drivers/staging/media/imx6/capture/mipi-csi2.c b/drivers/staging/media/imx6/capture/mipi-csi2.c
+index 9b4f0e5..6270d05 100644
+--- a/drivers/staging/media/imx6/capture/mipi-csi2.c
++++ b/drivers/staging/media/imx6/capture/mipi-csi2.c
+@@ -169,6 +169,21 @@ static int mx6csi2_dphy_wait(struct mx6csi2_dev *csi2)
+ 		return -ETIME;
+ 	}
+ 
++	/* finally let's wait for active clock on the clock lane */
++	for (i = 0; i < 50; i++) {
++		reg = mx6csi2_read(csi2, CSI2_PHY_STATE);
++		if (reg & (1 << 8))
++			break;
++		usleep_range(10000, 10001);
++	}
++
++	if (i >= 50) {
++		v4l2_err(&csi2->sd,
++			"wait for active clock timeout, phy_state = 0x%08x\n",
++			 reg);
++		return -ETIME;
++	}
++
+ 	v4l2_info(&csi2->sd, "ready, dphy version 0x%x\n",
+ 		  mx6csi2_read(csi2, CSI2_VERSION));
+ 
+-- 
+2.4.10
+

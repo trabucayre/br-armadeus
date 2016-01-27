@@ -1,0 +1,36 @@
+From 366caa1b3b51a754146e30e7cbf6802c66fb4634 Mon Sep 17 00:00:00 2001
+From: Vladimir Zapolskiy <vladimir_zapolskiy@mentor.com>
+Date: Mon, 28 Sep 2015 15:39:46 +0300
+Subject: [PATCH 664/668] media: imx6 camera: check return value of
+ v4l2_ctrl_handler_setup()
+
+Don't forget to check return value of v4l2_ctrl_handler_setup() and
+in case of an error free registered V4L2 controls. Note, hdlr->error
+in this case may be not set accordingly.
+
+Signed-off-by: Vladimir Zapolskiy <vladimir_zapolskiy@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index 5d63384..eb436f4 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -1071,9 +1071,11 @@ static int mx6cam_init_controls(struct mx6cam_dev *dev)
+ 	dev->v4l2_dev.ctrl_handler = hdlr;
+ 	dev->vfd->ctrl_handler = hdlr;
+ 
+-	v4l2_ctrl_handler_setup(hdlr);
++	ret = v4l2_ctrl_handler_setup(hdlr);
++	if (ret)
++		v4l2_ctrl_handler_free(hdlr);
+ 
+-	return 0;
++	return ret;
+ }
+ 
+ 
+-- 
+2.4.10
+

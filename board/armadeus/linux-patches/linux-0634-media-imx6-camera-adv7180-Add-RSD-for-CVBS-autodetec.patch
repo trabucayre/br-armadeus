@@ -1,0 +1,80 @@
+From 22788515f676f526c5cc8526c490c5a023caeb4c Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Mon, 16 Mar 2015 16:31:12 -0700
+Subject: [PATCH 634/668] media: imx6 camera: adv7180: Add RSD for CVBS
+ autodetect mode
+
+Add Analog Device's Register Settings Recommendations for CVBS autodetect
+mode. We don't use it yet because autodetect doesn't work very well when
+the chip is initialized with this set.
+
+The original register set from Freescale used to initialize the ADV7180
+chip contains mostly undocumented registers. It also does not conform to
+Analog Device's Register Settings Recommendations document (RSD). But
+it works better than the RSD in terms of autodetection so we are still
+using it.
+
+Based on linux-meibp 4dd2cfb5838cea8782dec775ae6b891fc80a84ed.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/adv7180.c | 36 ++++++++++++++++++++++++++++
+ 1 file changed, 36 insertions(+)
+
+diff --git a/drivers/staging/media/imx6/capture/adv7180.c b/drivers/staging/media/imx6/capture/adv7180.c
+index 0ee03f74..3f00ebd 100644
+--- a/drivers/staging/media/imx6/capture/adv7180.c
++++ b/drivers/staging/media/imx6/capture/adv7180.c
+@@ -286,6 +286,12 @@ struct adv7180_reg_tbl_t {
+  */
+ #define ADV_DELAY  -1
+ 
++/*
++ * This is the original register set from Freescale's adv7180
++ * driver. Most of these registers and their values are undocumented,
++ * and do not conform with Analog Device's Register Settings
++ * Recommendations document for CVBS autodetect mode.
++ */
+ static const struct adv7180_reg_tbl_t adv7180_fsl_init_reg[] = {
+ 	{ 0x00, 0x00 },
+ 	{ 0x01, 0xc8 }, { 0x02, 0x04 }, { 0x03, 0x00 }, { 0x04, 0x45 },
+@@ -350,6 +356,36 @@ static const struct adv7180_reg_tbl_t adv7180_fsl_init_reg[] = {
+ 	{ 0xFA, 0xFA }, { 0xFB, 0x40 },
+ };
+ 
++/*
++ * This is Analog Device's Register Settings Recommendation for CVBS
++ * autodetect mode. It is here for future reference only, we don't use
++ * it yet because autodetect doesn't work very well when the chip is
++ * initialized with this set.
++ */
++static const struct adv7180_reg_tbl_t __maybe_unused
++adv7180_cvbs_autodetect[] = {
++	/* Set analog mux for Composite Ain1 */
++	{ ADV7180_INPUT_CTL, 0x00 },
++	/* ADI Required Write: Reset Clamp Circuitry */
++	{ ADV7180_ANALOG_CLAMP_CTL, 0x30 },
++	/* Enable SFL Output */
++	{ ADV7180_EXT_OUT_CTL, 0x57 },
++	/* Select SH1 Chroma Shaping Filter */
++	{ ADV7180_SHAP_FILTER_CTL_1, 0x41 },
++	/* Enable NEWAVMODE */
++	{ ADV7180_VSYNC_FIELD_CTL_1, 0x02 },
++	/* ADI Required Write: optimize windowing function Step 1,2,3 */
++	{ ADV7180_MANUAL_WIN_CTL_1, 0xA2 },
++	{ ADV7180_MANUAL_WIN_CTL_2, 0x6A },
++	{ ADV7180_MANUAL_WIN_CTL_3, 0xA0 },
++	/* ADI Required Write: Enable ADC step 1,2,3 */
++	{ ADV7180_ADI_CTL_1, 0x80 }, /* undocumented bit 7 */
++	{ 0x55, 0x81 },              /* undocumented register 0x55 */
++	{ ADV7180_ADI_CTL_1, 0x00 },
++	/* Recommended AFE I BIAS Setting for CVBS mode */
++	{ ADV7180_CVBS_TRIM, 0x0D },
++};
++
+ #define ADV7180_VOLTAGE_ANALOG               1800000
+ #define ADV7180_VOLTAGE_DIGITAL_CORE         1800000
+ #define ADV7180_VOLTAGE_DIGITAL_IO           3300000
+-- 
+2.4.10
+

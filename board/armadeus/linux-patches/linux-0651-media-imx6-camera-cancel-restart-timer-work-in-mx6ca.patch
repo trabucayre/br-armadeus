@@ -1,0 +1,149 @@
+From 46acb5d1f8ee43f27d75f8e2214a7276c780a527 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Mon, 10 Aug 2015 18:28:42 -0700
+Subject: [PATCH 651/668] media: imx6 camera: cancel restart timer/work in
+ mx6cam_release()
+
+Need to cancel the restart timer and work on a release of an io
+context. At this point streaming and preview are stopped, and a
+new stop flag has been set by mx6cam_stop_streaming(), so after
+the call to del_timer_sync() there will be no more restart timers
+queued.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c | 45 +++++++++++++++++++++-----
+ drivers/staging/media/imx6/capture/mx6-camif.h |  1 +
+ 2 files changed, 38 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index dd331a9..12cd406 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -608,6 +608,10 @@ static void restart_work_handler(struct work_struct *w)
+ 
+ 	mutex_lock(&dev->mutex);
+ 
++	/* this can happen if we are releasing the io context */
++	if (!is_io_ctx(ctx))
++		goto out_unlock;
++
+ 	if (!vb2_is_streaming(&dev->buffer_queue)) {
+ 		/* just restart preview if on */
+ 		if (dev->preview_on) {
+@@ -618,10 +622,11 @@ static void restart_work_handler(struct work_struct *w)
+ 		goto out_unlock;
+ 	}
+ 
+-	v4l2_warn(&dev->v4l2_dev, "restarting\n");
+-
+-	set_stream(ctx, false);
+-	set_stream(ctx, true);
++	if (!ctx->stop) {
++		v4l2_warn(&dev->v4l2_dev, "restarting\n");
++		set_stream(ctx, false);
++		set_stream(ctx, true);
++	}
+ 
+ out_unlock:
+ 	mutex_unlock(&dev->mutex);
+@@ -1204,7 +1209,7 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int index)
+ 	 * no lock status change event is generated, but vertical sync
+ 	 * is messed up nevertheless. So schedule a restart to correct it.
+ 	 */
+-	if (is_io_ctx(ctx)) {
++	if (is_io_ctx(ctx) && !ctx->stop) {
+ 		spin_lock_irqsave(&dev->notify_lock, flags);
+ 		mod_timer(&ctx->restart_timer,
+ 			  jiffies + msecs_to_jiffies(MX6CAM_RESTART_DELAY));
+@@ -1697,6 +1702,8 @@ static int mx6cam_start_streaming(struct vb2_queue *vq, unsigned int count)
+ 	if (vb2_is_streaming(vq))
+ 		return 0;
+ 
++	ctx->stop = false;
++
+ 	return set_stream(ctx, true);
+ }
+ 
+@@ -1710,6 +1717,13 @@ static void mx6cam_stop_streaming(struct vb2_queue *vq)
+ 	if (!vb2_is_streaming(vq))
+ 		return;
+ 
++	/*
++	 * signal that streaming is being stopped, so that the
++	 * restart_work_handler() will skip unnecessary stream
++	 * restarts, and to stop kicking the restart timer.
++	 */
++	ctx->stop = true;
++
+ 	set_stream(ctx, false);
+ 
+ 	spin_lock_irqsave(&dev->irqlock, flags);
+@@ -1816,13 +1830,28 @@ static int mx6cam_release(struct file *file)
+ 		vb2_dma_contig_cleanup_ctx(ctx->alloc_ctx);
+ 
+ 		if (dev->preview_on) {
++			/*
++			 * we need to set the stop flag again here, in
++			 * case of preview-only (no streaming running)
++			 */
++			ctx->stop = true;
+ 			stop_preview(dev);
+ 			dev->preview_on = false;
+ 		}
+ 
+ 		spin_lock_irqsave(&dev->notify_lock, flags);
++		/* cancel any pending or scheduled restart timer */
++		del_timer_sync(&ctx->restart_timer);
+ 		dev->io_ctx = NULL;
+ 		spin_unlock_irqrestore(&dev->notify_lock, flags);
++
++		/*
++		 * cancel any scheduled restart work, we have to release
++		 * the dev->mutex in case it has already been scheduled.
++		 */
++		mutex_unlock(&dev->mutex);
++		cancel_work_sync(&ctx->restart_work);
++		mutex_lock(&dev->mutex);
+ 	}
+ 
+ 	if (dev->ep == NULL || dev->ep->sd == NULL) {
+@@ -1914,20 +1943,20 @@ static void mx6cam_subdev_notification(struct v4l2_subdev *sd,
+ 
+ 	switch (notification) {
+ 	case MX6CAM_NFB4EOF_NOTIFY:
+-		if (ctx)
++		if (ctx && !ctx->stop)
+ 			mod_timer(&ctx->restart_timer, jiffies +
+ 				  msecs_to_jiffies(MX6CAM_RESTART_DELAY));
+ 		break;
+ 	case DECODER_STATUS_CHANGE_NOTIFY:
+ 		atomic_set(&dev->status_change, 1);
+-		if (ctx) {
++		if (ctx && !ctx->stop) {
+ 			v4l2_warn(&dev->v4l2_dev, "decoder status change\n");
+ 			mod_timer(&ctx->restart_timer, jiffies +
+ 				  msecs_to_jiffies(MX6CAM_RESTART_DELAY));
+ 		}
+ 		break;
+ 	case MX6CAM_EOF_TIMEOUT_NOTIFY:
+-		if (ctx) {
++		if (ctx && !ctx->stop) {
+ 			/* cancel a running restart timer since we are
+ 			   restarting now anyway */
+ 			del_timer_sync(&ctx->restart_timer);
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.h b/drivers/staging/media/imx6/capture/mx6-camif.h
+index 30f3b7d..e706801 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.h
++++ b/drivers/staging/media/imx6/capture/mx6-camif.h
+@@ -206,6 +206,7 @@ struct mx6cam_ctx {
+ 	struct work_struct      restart_work;
+ 	struct work_struct      stop_work;
+ 	struct timer_list       restart_timer;
++	bool                    stop; /* streaming is stopping */
+ };
+ 
+ struct v4l2_subdev *mx6cam_csi_init(struct mx6cam_dev *dev);
+-- 
+2.4.10
+

@@ -1,0 +1,33 @@
+From 0a59a00bd29befad10f977c929a8c90b1c0cff01 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Thu, 14 May 2015 15:48:32 -0700
+Subject: [PATCH 637/668] media: imx6 camera: Fix preview only mode
+
+In the case of preview only (no buffer streaming), the booleans
+using_ic and using_vdic were not getting set, in particular using_ic
+must be set true so that the csi subdev routes captured frames to
+the IC.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index a50757c..38400f6 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -1504,6 +1504,10 @@ static int vidioc_overlay(struct file *file, void *priv,
+ 			return -EINVAL;
+ 		}
+ 
++		/* make sure to set these booleans in case of preview only */
++		dev->using_ic = true;
++		dev->using_vdic = false;
++
+ 		ret = start_preview(dev);
+ 		if (!ret)
+ 			dev->preview_on = true;
+-- 
+2.4.10
+

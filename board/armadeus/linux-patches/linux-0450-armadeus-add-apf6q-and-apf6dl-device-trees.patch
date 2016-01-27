@@ -1,0 +1,226 @@
+Index: linux-4.4/arch/arm/boot/dts/imx6qdl-apf6.dtsi
+===================================================================
+--- linux-4.4.orig/arch/arm/boot/dts/imx6qdl-apf6.dtsi
++++ linux-4.4/arch/arm/boot/dts/imx6qdl-apf6.dtsi
+@@ -48,6 +48,29 @@
+ #include <dt-bindings/gpio/gpio.h>
+ #include <dt-bindings/interrupt-controller/irq.h>
+ 
++/ {
++	wlan {
++		compatible = "ti,wilink6";
++		interrupt-parent = <&gpio2>;
++		interrupts = <10 IRQ_TYPE_LEVEL_HIGH>; /* gpio line 42, high level triggered */
++		clocks = <&refclock>, <&tcxoclock>;
++		clock-names = "refclock", "tcxoclock";
++
++		refclock: refclock {
++			compatible = "ti,wilink-clock";
++			#clock-cells = <0>;
++			clock-frequency = <38400000>;
++		};
++
++		tcxoclock: tcxoclock {
++			compatible = "ti,wilink-clock";
++			#clock-cells = <0>;
++			clock-frequency = <38400000>;
++		};
++	};
++};
++
++
+ &fec {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&pinctrl_enet>;
+Index: linux-4.4/arch/arm/boot/dts/imx6qdl-apf6dev.dtsi
+===================================================================
+--- linux-4.4.orig/arch/arm/boot/dts/imx6qdl-apf6dev.dtsi
++++ linux-4.4/arch/arm/boot/dts/imx6qdl-apf6dev.dtsi
+@@ -54,6 +54,15 @@
+ 		stdout-path = &uart4;
+ 	};
+ 
++	backlight_lcd {
++		compatible = "pwm-backlight";
++		pwms = <&pwm3 0 191000>;
++		brightness-levels = <0 4 8 16 32 64 128 255>;
++		default-brightness-level = <0>;
++		power-supply = <&reg_1p8v>;
++		status = "okay";
++	};
++
+ 	display@di0 {
+ 		compatible = "fsl,imx-parallel-display";
+ 		interface-pix-fmt = "bgr666";
+@@ -114,6 +123,14 @@
+ 	regulators {
+ 		compatible = "simple-bus";
+ 
++		reg_1p8v: 1p8v {
++			compatible = "regulator-fixed";
++			regulator-name = "1P8V";
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1800000>;
++			regulator-always-on;
++		};
++
+ 		reg_3p3v: 3p3v {
+ 			compatible = "regulator-fixed";
+ 			regulator-name = "3P3V";
+@@ -159,6 +176,29 @@
+ 		spdif-controller = <&spdif>;
+ 		spdif-out;
+ 	};
++
++	v4l2-capture {
++		compatible = "fsl,imx6-v4l2-capture";
++		#address-cells = <1>;
++		#size-cells = <0>;
++		ipu = <&ipu1>;
++		status = "okay";
++
++		/* CSI0 */
++		port@0 {
++			#address-cells = <1>;
++			#size-cells = <0>;
++			reg = <1>;
++
++			/* MIPI CSI-2 virtual channel 0 */
++			csi1_vc0: endpoint@0 {
++				reg = <0>;
++				remote-endpoint = <&ov5640>;
++				data-lanes = <0 1>;
++				clock-lanes = <2>;
++			};
++		};
++	};
+ };
+ 
+ &audmux {
+@@ -201,6 +241,36 @@
+ 		pinctrl-0 = <&pinctrl_touchscreen>;
+ 		interrupt-parent = <&gpio6>;
+ 		interrupts = <3 IRQ_TYPE_EDGE_FALLING>;
++		x-plate-ohms = <1100>;
++		y-plate-ohms = <500>;
++		min-x = <0>;
++		max-x = <800>;
++		min-y = <0>;
++		max-y = <480>;
++	};
++
++	mipi_camera: ov5640@3c {
++		compatible = "ovti,ov5640_mipi";
++		reg = <0x3c>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&pinctrl_camera_ov5640>;
++		clocks = <&clks 201>;
++		clock-names = "xclk";
++		xclk = <24000000>;
++		pwdn-gpios = <&gpio5 20 GPIO_ACTIVE_HIGH>;
++		reset-gpios = <&gpio5 19 GPIO_ACTIVE_LOW>;
++
++		port {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			ov5640: endpoint@1 {
++				reg = <1>;
++				remote-endpoint = <&csi1_vc0>;
++				data-lanes = <0 1>;
++				clock-lanes = <2>;
++			};
++		};
+ 	};
+ };
+ 
+@@ -210,6 +280,11 @@
+ 	pinctrl-0 = <&pinctrl_i2c2>;
+ 	status = "okay";
+ 
++	rtc@6f {
++		compatible = "microchip,mcp7940x-rtc";
++		reg = <0x6F>;
++	};
++
+ 	codec: sgtl5000@0a {
+ 		compatible = "fsl,sgtl5000";
+ 		reg = <0x0a>;
+@@ -230,6 +305,21 @@
+ 	remote-endpoint = <&display_in>;
+ };
+ 
++&mipi_csi {
++	status = "okay";
++	#address-cells = <1>;
++	#size-cells = <0>;
++
++	/* Incoming port from sensor */
++	port {
++		mipi_csi2_0: endpoint {
++			remote-endpoint = <&ov5640>;
++			data-lanes = <0 1>;
++			clock-lanes = <2>;
++		};
++	};
++};
++
+ &pcie {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&pinctrl_pcie>;
+@@ -265,8 +355,16 @@
+ 	status = "okay";
+ };
+ 
++&uart5 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_uart5>;
++	fsl,uart-has-rtscts;
++	status = "okay";
++};
++
+ &usbh1 {
+ 	vbus-supply = <&reg_usbh1_vbus>;
++	dr_mode = "host";
+ 	phy_type = "utmi";
+ 	status = "okay";
+ };
+@@ -295,6 +393,7 @@
+ };
+ 
+ &ssi1 {
++	fsl,mode = "i2s-slave";
+ 	status = "okay";
+ };
+ 
+@@ -313,6 +412,14 @@
+ 			>;
+ 		};
+ 
++		pinctrl_camera_ov5640: cameragrp {
++			fsl,pins = <
++				MX6QDL_PAD_GPIO_3__XTALOSC_REF_CLK_24M 0x1b0b0 /* CSI_MCLK */
++				MX6QDL_PAD_CSI0_MCLK__GPIO5_IO19       0x80000000
++				MX6QDL_PAD_CSI0_DATA_EN__GPIO5_IO20    0x80000000
++			>;
++		};
++
+ 		pinctrl_ecspi1: ecspi1grp {
+ 			fsl,pins = <
+ 				MX6QDL_PAD_KEY_COL1__ECSPI1_MISO 0x100b1
+@@ -447,6 +554,15 @@
+ 			>;
+ 		};
+ 
++		pinctrl_uart5: uart5grp {
++			fsl,pins = <
++				MX6QDL_PAD_CSI0_DAT14__UART5_TX_DATA 0x1b0b0
++				MX6QDL_PAD_CSI0_DAT15__UART5_RX_DATA 0x1b0b0
++				MX6QDL_PAD_CSI0_DAT18__UART5_RTS_B   0x1b0b0
++				MX6QDL_PAD_CSI0_DAT19__UART5_CTS_B   0x1b0b0
++			>;
++		};
++
+ 		pinctrl_usbotg: usbotggrp {
+ 			fsl,pins = <
+ 				MX6QDL_PAD_GPIO_1__USB_OTG_ID 0x1b0b0

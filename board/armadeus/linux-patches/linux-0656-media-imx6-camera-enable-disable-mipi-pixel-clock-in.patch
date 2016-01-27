@@ -1,0 +1,67 @@
+From bfe612fabf9ea8fe92d5d3df0d555e4943222106 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Tue, 11 Aug 2015 16:58:47 -0700
+Subject: [PATCH 656/668] media: imx6 camera: enable/disable "mipi pixel clock"
+ in s_stream
+
+Another mysterious input clock to the mipi csi-2 receiver core.
+The imx6 reference manual refers to this as the "mipi pixel clock".
+The Freescale kernel enables/disables it on capture stream on, so we
+should probably do the same.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mipi-csi2.c | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mipi-csi2.c b/drivers/staging/media/imx6/capture/mipi-csi2.c
+index 02283c7..9b4f0e5 100644
+--- a/drivers/staging/media/imx6/capture/mipi-csi2.c
++++ b/drivers/staging/media/imx6/capture/mipi-csi2.c
+@@ -33,6 +33,7 @@ struct mx6csi2_dev {
+ 	struct v4l2_subdev      sd;
+ 	struct clk             *dphy_clk;
+ 	struct clk             *cfg_clk;
++	struct clk             *pix_clk; /* what is this? */
+ 	void __iomem           *base;
+ 	int                     intr1;
+ 	int                     intr2;
+@@ -170,6 +171,7 @@ static int mx6csi2_dphy_wait(struct mx6csi2_dev *csi2)
+ 
+ 	v4l2_info(&csi2->sd, "ready, dphy version 0x%x\n",
+ 		  mx6csi2_read(csi2, CSI2_VERSION));
++
+ 	return 0;
+ }
+ 
+@@ -202,8 +204,12 @@ static int mx6csi2_s_stream(struct v4l2_subdev *sd, int enable)
+ 	struct mx6csi2_dev *csi2 = sd_to_dev(sd);
+ 	int ret = 0;
+ 
+-	if (enable)
++	if (enable) {
++		clk_prepare_enable(csi2->pix_clk);
+ 		ret = mx6csi2_dphy_wait(csi2);
++	} else {
++		clk_disable_unprepare(csi2->pix_clk);
++	}
+ 
+ 	return ret;
+ }
+@@ -285,6 +291,13 @@ static int mx6csi2_probe(struct platform_device *pdev)
+ 		return ret;
+ 	}
+ 
++	csi2->pix_clk = devm_clk_get(&pdev->dev, "pix_clk");
++	if (IS_ERR(csi2->pix_clk)) {
++		v4l2_err(&csi2->sd, "failed to get pixel clock\n");
++		ret = PTR_ERR(csi2->pix_clk);
++		return ret;
++	}
++
+ 	csi2->intr1 = platform_get_irq(pdev, 0);
+ 	csi2->intr2 = platform_get_irq(pdev, 1);
+ 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+-- 
+2.4.10
+

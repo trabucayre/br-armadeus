@@ -1,0 +1,267 @@
+From 544c05a5d5e1b1967bf4eb8e3a5b84775d66f56a Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Tue, 9 Jun 2015 16:39:54 -0700
+Subject: [PATCH 644/668] media: imx6 camera: adv7180: Add Cb/Cr offset
+ controls
+
+Add custom controls to set SD offsets for Cb and Cr channels.
+
+As part of adding initial support for custom controls, we need
+to cleanup some things. adv7180_qctrl[] is changed to an array
+of const struct v4l2_ctrl_config and renamed adv7180_std_ctrl[].
+And we add a new array adv7180_custom_ctrl[] of the same type.
+Also remove saved control values as they are not used (v4l2 core
+caches control values for us anyway).
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/adv7180.c | 164 ++++++++++++++-------------
+ include/media/imx6.h                         |   5 +
+ 2 files changed, 88 insertions(+), 81 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/adv7180.c b/drivers/staging/media/imx6/capture/adv7180.c
+index fa788f0..16da552 100644
+--- a/drivers/staging/media/imx6/capture/adv7180.c
++++ b/drivers/staging/media/imx6/capture/adv7180.c
+@@ -47,16 +47,6 @@ struct adv7180_dev {
+ 
+ 	bool locked;             /* locked to signal */
+ 
+-	/* control settings */
+-	int brightness;
+-	int hue;
+-	int contrast;
+-	int saturation;
+-	int red;
+-	int green;
+-	int blue;
+-	int ae_mode;
+-
+ 	struct regulator *dvddio;
+ 	struct regulator *dvdd;
+ 	struct regulator *avdd;
+@@ -169,6 +159,8 @@ static struct video_fmt_t video_fmts[] = {
+ #define ADV7180_MANUAL_WIN_CTL_3       0x3f     /* Manual Window Control 3 */
+ #define ADV7180_LOCK_COUNT             0x51
+ #define ADV7180_CVBS_TRIM              0x52
++#define ADV7180_SD_OFFSET_CB           0xe1	/* SD Offset Cb */
++#define ADV7180_SD_OFFSET_CR           0xe2	/* SD Offset Cr */
+ #define ADV7180_SD_SATURATION_CB       0xe3	/* SD Saturation Cb */
+ #define ADV7180_SD_SATURATION_CR       0xe4	/* SD Saturation Cr */
+ #define ADV7180_DRIVE_STRENGTH         0xf4
+@@ -194,50 +186,6 @@ static struct video_fmt_t video_fmts[] = {
+ #define ADV7180_INT_CLEAR_3            0x4b     /* Interrupt Clear 3 (w/o) */
+ #define ADV7180_INT_MASK_3             0x4c     /* Interrupt Mask 3 */
+ 
+-/* supported controls */
+-/* This hasn't been fully implemented yet.
+- * This is how it should work, though. */
+-static struct v4l2_queryctrl adv7180_qctrl[] = {
+-	{
+-		.id = V4L2_CID_BRIGHTNESS,
+-		.type = V4L2_CTRL_TYPE_INTEGER,
+-		.name = "Brightness",
+-		.minimum = 0,		/* check this value */
+-		.maximum = 255,		/* check this value */
+-		.step = 1,		/* check this value */
+-		.default_value = 0,	/* check this value */
+-		.flags = 0,
+-	}, {
+-		.id = V4L2_CID_SATURATION,
+-		.type = V4L2_CTRL_TYPE_INTEGER,
+-		.name = "Saturation",
+-		.minimum = 0,		/* check this value */
+-		.maximum = 255,		/* check this value */
+-		.step = 0x1,		/* check this value */
+-		.default_value = 128,	/* check this value */
+-		.flags = 0,
+-	}, {
+-		.id = V4L2_CID_CONTRAST,
+-		.type = V4L2_CTRL_TYPE_INTEGER,
+-		.name = "Contrast",
+-		.minimum = 0,
+-		.maximum = 255,
+-		.step = 0x1,
+-		.default_value = 128,
+-		.flags = 0,
+-	}, {
+-		.id = V4L2_CID_HUE,
+-		.type = V4L2_CTRL_TYPE_INTEGER,
+-		.name = "Hue",
+-		.minimum = -127,
+-		.maximum = 128,
+-		.step = 0x1,
+-		.default_value = 0,
+-		.flags = 0,
+-	}
+-};
+-#define ADV7180_NUM_CONTROLS ARRAY_SIZE(adv7180_qctrl)
+-
+ struct adv7180_inputs_t {
+ 	const char *desc;   /* Analog input description */
+ 	u8 insel;           /* insel bits to select this input */
+@@ -816,44 +764,28 @@ static int adv7180_s_ctrl(struct v4l2_ctrl *ctrl)
+ 	case V4L2_CID_BRIGHTNESS:
+ 		tmp = ctrl->val;
+ 		ADV7180_WRITE_REG(sensor, ADV7180_BRIGHTNESS, tmp);
+-		sensor->brightness = ctrl->val;
+ 		break;
+ 	case V4L2_CID_CONTRAST:
+ 		tmp = ctrl->val;
+ 		ADV7180_WRITE_REG(sensor, ADV7180_CONTRAST, tmp);
+-		sensor->contrast = ctrl->val;
+ 		break;
+ 	case V4L2_CID_SATURATION:
+ 		tmp = ctrl->val;
+ 		ADV7180_WRITE_REG(sensor, ADV7180_SD_SATURATION_CB, tmp);
+ 		ADV7180_WRITE_REG(sensor, ADV7180_SD_SATURATION_CR, tmp);
+-		sensor->saturation = ctrl->val;
+ 		break;
+ 	case V4L2_CID_HUE:
+ 		tmp = ctrl->val;
+ 		/* Hue is inverted according to HSL chart */
+ 		ADV7180_WRITE_REG(sensor, ADV7180_HUE_REG, -tmp);
+-		sensor->hue = ctrl->val;
+-		break;
+-	case V4L2_CID_AUTO_WHITE_BALANCE:
+-		break;
+-	case V4L2_CID_DO_WHITE_BALANCE:
+ 		break;
+-	case V4L2_CID_RED_BALANCE:
++	case V4L2_CID_ADV718x_OFF_CR:
++		tmp = ctrl->val + 128;
++		ADV7180_WRITE_REG(sensor, ADV7180_SD_OFFSET_CR, tmp);
+ 		break;
+-	case V4L2_CID_BLUE_BALANCE:
+-		break;
+-	case V4L2_CID_GAMMA:
+-		break;
+-	case V4L2_CID_EXPOSURE:
+-		break;
+-	case V4L2_CID_AUTOGAIN:
+-		break;
+-	case V4L2_CID_GAIN:
+-		break;
+-	case V4L2_CID_HFLIP:
+-		break;
+-	case V4L2_CID_VFLIP:
++	case V4L2_CID_ADV718x_OFF_CB:
++		tmp = ctrl->val + 128;
++		ADV7180_WRITE_REG(sensor, ADV7180_SD_OFFSET_CB, tmp);
+ 		break;
+ 	default:
+ 		ret = -EPERM;
+@@ -867,19 +799,89 @@ static const struct v4l2_ctrl_ops adv7180_ctrl_ops = {
+ 	.s_ctrl = adv7180_s_ctrl,
+ };
+ 
++/* supported standard controls */
++static const struct v4l2_ctrl_config adv7180_std_ctrl[] = {
++	{
++		.id = V4L2_CID_BRIGHTNESS,
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.name = "Brightness",
++		.def =   0,
++		.min =   0,
++		.max = 255,
++		.step =  1,
++	}, {
++		.id = V4L2_CID_SATURATION,
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.name = "Saturation",
++		.def = 128,
++		.min =   0,
++		.max = 255,
++		.step =  1,
++	}, {
++		.id = V4L2_CID_CONTRAST,
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.name = "Contrast",
++		.def = 128,
++		.min =   0,
++		.max = 255,
++		.step =  1,
++	}, {
++		.id = V4L2_CID_HUE,
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.name = "Hue",
++		.def =    0,
++		.min = -127,
++		.max =  128,
++		.step =   1,
++	},
++};
++#define ADV7180_NUM_STD_CONTROLS ARRAY_SIZE(adv7180_std_ctrl)
++
++/* supported custom controls */
++static const struct v4l2_ctrl_config adv7180_custom_ctrl[] = {
++	{
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_OFF_CR,
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.name = "Offset Cr",
++		.def =    0, /*    0 mV offset applied to the Cr channel */
++		.min = -128, /* −312 mV offset applied to the Cr channel */
++		.max =  127, /* +312 mV offset applied to the Cr channel */
++		.step =   1,
++	}, {
++		.ops = &adv7180_ctrl_ops,
++		.id = V4L2_CID_ADV718x_OFF_CB,
++		.type = V4L2_CTRL_TYPE_INTEGER,
++		.name = "Offset Cb",
++		.def =    0, /*    0 mV offset applied to the Cb channel */
++		.min = -128, /* −312 mV offset applied to the Cb channel */
++		.max =  127, /* +312 mV offset applied to the Cb channel */
++		.step =   1,
++	},
++};
++#define ADV7180_NUM_CUSTOM_CONTROLS ARRAY_SIZE(adv7180_custom_ctrl)
++
++#define ADV7180_NUM_CONTROLS \
++	(ADV7180_NUM_STD_CONTROLS + ADV7180_NUM_CUSTOM_CONTROLS)
++
+ static int adv7180_init_controls(struct adv7180_dev *sensor)
+ {
+-	struct v4l2_queryctrl *c;
++	const struct v4l2_ctrl_config *c;
+ 	int i;
+ 
+ 	v4l2_ctrl_handler_init(&sensor->ctrl_hdl, ADV7180_NUM_CONTROLS);
+ 
+-	for (i = 0; i < ADV7180_NUM_CONTROLS; i++) {
+-		c = &adv7180_qctrl[i];
++	for (i = 0; i < ADV7180_NUM_STD_CONTROLS; i++) {
++		c = &adv7180_std_ctrl[i];
+ 
+ 		v4l2_ctrl_new_std(&sensor->ctrl_hdl, &adv7180_ctrl_ops,
+-				  c->id, c->minimum, c->maximum,
+-				  c->step, c->default_value);
++				  c->id, c->min, c->max, c->step, c->def);
++	}
++
++	for (i = 0; i < ADV7180_NUM_CUSTOM_CONTROLS; i++) {
++		c = &adv7180_custom_ctrl[i];
++
++		v4l2_ctrl_new_custom(&sensor->ctrl_hdl, c, NULL);
+ 	}
+ 
+ 	sensor->sd.ctrl_handler = &sensor->ctrl_hdl;
+diff --git a/include/media/imx6.h b/include/media/imx6.h
+index 6b62e16..e57eb22 100644
+--- a/include/media/imx6.h
++++ b/include/media/imx6.h
+@@ -14,6 +14,11 @@ enum imx6_ctrl_id {
+ 	V4L2_CID_IMX6_MOTION = (V4L2_CID_USER_IMX6_BASE + 0),
+ };
+ 
++enum adv718x_ctrl_id {
++	V4L2_CID_ADV718x_OFF_CB = (V4L2_CID_USER_ADV718X_BASE + 0),
++	V4L2_CID_ADV718x_OFF_CR,
++};
++
+ /*
+  * Analog decoder status change notifications
+  */
+-- 
+2.4.10
+

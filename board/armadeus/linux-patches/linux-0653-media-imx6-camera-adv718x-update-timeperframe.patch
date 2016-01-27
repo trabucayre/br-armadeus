@@ -1,0 +1,70 @@
+From 924c9d5bb7b8b61db3f921766af510adcc463607 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Thu, 13 Aug 2015 13:42:33 -0700
+Subject: [PATCH 653/668] media: imx6 camera: adv718x: update timeperframe
+
+Set the correct frame rate at probe time, and update it
+when the standard changes.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/adv7180.c | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/adv7180.c b/drivers/staging/media/imx6/capture/adv7180.c
+index fcf21a7..13b53a1 100644
+--- a/drivers/staging/media/imx6/capture/adv7180.c
++++ b/drivers/staging/media/imx6/capture/adv7180.c
+@@ -89,6 +89,7 @@ enum {
+ struct video_fmt_t {
+ 	int v4l2_id;		/*!< Video for linux ID. */
+ 	char name[16];		/*!< Name (e.g., "NTSC", "PAL", etc.) */
++	struct v4l2_fract timeperframe;
+ 	struct v4l2_rect raw;
+ 	struct v4l2_rect crop;
+ };
+@@ -102,6 +103,10 @@ static struct video_fmt_t video_fmts[] = {
+ 	{       /* NTSC */
+ 		.v4l2_id = V4L2_STD_NTSC,
+ 		.name = "NTSC",
++		.timeperframe = {
++			.numerator = 1001,
++			.denominator = 30000,
++		},
+ 		.raw = {
+ 			.width = 720,
+ 			.height = 525,
+@@ -115,6 +120,10 @@ static struct video_fmt_t video_fmts[] = {
+ 	}, {    /* (B, G, H, I, N) PAL */
+ 		.v4l2_id = V4L2_STD_PAL,
+ 		.name = "PAL",
++		.timeperframe = {
++			.numerator = 1,
++			.denominator = 25,
++		},
+ 		.raw = {
+ 			.width = 720,
+ 			.height = 625,
+@@ -567,6 +576,8 @@ static int adv7180_get_autodetect_std(struct adv7180_dev *sensor,
+ 	if (std != sensor->std_id) {
+ 		sensor->video_idx = idx;
+ 		sensor->std_id = std;
++		sensor->streamcap.timeperframe =
++			video_fmts[sensor->video_idx].timeperframe;
+ 		sensor->fmt.width = video_fmts[sensor->video_idx].raw.width;
+ 		sensor->fmt.height = video_fmts[sensor->video_idx].raw.height;
+ 		*status_change = true;
+@@ -1328,8 +1339,8 @@ static int adv7180_probe(struct i2c_client *client,
+ 
+ 	/* Set initial values for the sensor struct. */
+ 	sensor->i2c_client = client;
+-	sensor->streamcap.timeperframe.denominator = 30;
+-	sensor->streamcap.timeperframe.numerator = 1;
++	sensor->streamcap.timeperframe =
++		video_fmts[sensor->video_idx].timeperframe;
+ 	sensor->fmt.width = video_fmts[sensor->video_idx].raw.width;
+ 	sensor->fmt.height = video_fmts[sensor->video_idx].raw.height;
+ 	sensor->fmt.code = MEDIA_BUS_FMT_UYVY8_2X8;
+-- 
+2.4.10
+

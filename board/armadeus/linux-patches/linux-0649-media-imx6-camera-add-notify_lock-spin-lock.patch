@@ -1,0 +1,125 @@
+From db44ea716234e93706e6d27eb869c1a0430481d5 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Tue, 11 Aug 2015 10:09:43 -0700
+Subject: [PATCH 649/668] media: imx6 camera: add notify_lock spin lock
+
+Make sure changes to the restart_timer and io_ctx pointer are
+mutually exclusive with a new spin lock. Call it notify_lock.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c | 20 +++++++++++++++++++-
+ drivers/staging/media/imx6/capture/mx6-camif.h |  1 +
+ 2 files changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index b2af99b..fdc77d6 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -1145,6 +1145,7 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int index)
+ 	struct mx6cam_sensor_input *epinput;
+ 	struct mx6cam_endpoint *ep;
+ 	int ret, sensor_input;
++	unsigned long flags;
+ 
+ 	if (index == dev->current_input)
+ 		return 0;
+@@ -1203,9 +1204,12 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int index)
+ 	 * no lock status change event is generated, but vertical sync
+ 	 * is messed up nevertheless. So schedule a restart to correct it.
+ 	 */
+-	if (is_io_ctx(ctx))
++	if (is_io_ctx(ctx)) {
++		spin_lock_irqsave(&dev->notify_lock, flags);
+ 		mod_timer(&ctx->restart_timer,
+ 			  jiffies + msecs_to_jiffies(MX6CAM_RESTART_DELAY));
++		spin_unlock_irqrestore(&dev->notify_lock, flags);
++	}
+ 
+ 	return 0;
+ }
+@@ -1379,6 +1383,7 @@ static int vidioc_reqbufs(struct file *file, void *priv,
+ 	struct mx6cam_ctx *ctx = file2ctx(file);
+ 	struct mx6cam_dev *dev = ctx->dev;
+ 	struct vb2_queue *vq = &dev->buffer_queue;
++	unsigned long flags;
+ 	int ret;
+ 
+ 	if (vb2_is_busy(vq) || (dev->io_ctx && !is_io_ctx(ctx)))
+@@ -1416,7 +1421,10 @@ static int vidioc_reqbufs(struct file *file, void *priv,
+ 		goto alloc_ctx_free;
+ 	}
+ 
++	spin_lock_irqsave(&dev->notify_lock, flags);
+ 	dev->io_ctx = ctx;
++	spin_unlock_irqrestore(&dev->notify_lock, flags);
++
+ 	return 0;
+ 
+ alloc_ctx_free:
+@@ -1795,6 +1803,7 @@ static int mx6cam_release(struct file *file)
+ {
+ 	struct mx6cam_ctx *ctx = file2ctx(file);
+ 	struct mx6cam_dev *dev = ctx->dev;
++	unsigned long flags;
+ 	int ret = 0;
+ 
+ 	v4l2_fh_del(&ctx->fh);
+@@ -1811,7 +1820,9 @@ static int mx6cam_release(struct file *file)
+ 			dev->preview_on = false;
+ 		}
+ 
++		spin_lock_irqsave(&dev->notify_lock, flags);
+ 		dev->io_ctx = NULL;
++		spin_unlock_irqrestore(&dev->notify_lock, flags);
+ 	}
+ 
+ 	if (dev->ep == NULL || dev->ep->sd == NULL) {
+@@ -1890,11 +1901,15 @@ static void mx6cam_subdev_notification(struct v4l2_subdev *sd,
+ {
+ 	struct mx6cam_dev *dev;
+ 	struct mx6cam_ctx *ctx;
++	unsigned long flags;
+ 
+ 	if (sd == NULL)
+ 		return;
+ 
+ 	dev = sd2dev(sd);
++
++	spin_lock_irqsave(&dev->notify_lock, flags);
++
+ 	ctx = dev->io_ctx;
+ 
+ 	switch (notification) {
+@@ -1921,6 +1936,8 @@ static void mx6cam_subdev_notification(struct v4l2_subdev *sd,
+ 		}
+ 		break;
+ 	}
++
++	spin_unlock_irqrestore(&dev->notify_lock, flags);
+ }
+ 
+ static int mx6cam_add_sensor(struct mx6cam_dev *dev,
+@@ -2295,6 +2312,7 @@ static int mx6cam_probe(struct platform_device *pdev)
+ 	dev->dev = &pdev->dev;
+ 	mutex_init(&dev->mutex);
+ 	spin_lock_init(&dev->irqlock);
++	spin_lock_init(&dev->notify_lock);
+ 
+ 	ret = v4l2_device_register(&pdev->dev, &dev->v4l2_dev);
+ 	if (ret)
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.h b/drivers/staging/media/imx6/capture/mx6-camif.h
+index 4fd73fe..30f3b7d 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.h
++++ b/drivers/staging/media/imx6/capture/mx6-camif.h
+@@ -109,6 +109,7 @@ struct mx6cam_dev {
+ 
+ 	struct mutex		mutex;
+ 	spinlock_t		irqlock;
++	spinlock_t		notify_lock;
+ 
+ 	/* buffer queue used in videobuf2 */
+ 	struct vb2_queue        buffer_queue;
+-- 
+2.4.10
+

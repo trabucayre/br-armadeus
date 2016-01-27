@@ -1,0 +1,756 @@
+From 71ebf35e26492ba139500b4b05f71095de86ef13 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Wed, 13 May 2015 11:27:44 -0700
+Subject: [PATCH 640/668] media: imx6 camera: Become user of ipu-plane for
+ preview
+
+All of the IPU display plane control has been moved into a new
+IPU subunit called ipu-plane. With this the imx6 capture driver
+can now directly control display planes in preview mode without
+any dependency on userland code to setup and enable planes via KMS.
+
+The imx6 capture driver now requires a device tree property that
+points to a plane phandle that the driver will display to for
+preview (if the plane phandle is missing, preview mode will be
+disabled). This plane can belong to the same or different IPU
+that the driver uses for scaling, CSC, rotation, and transfer
+to framebuffer.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c   | 157 +++++++++----
+ drivers/staging/media/imx6/capture/mx6-camif.h   |  11 +-
+ drivers/staging/media/imx6/capture/mx6-preview.c | 266 ++++++++++++-----------
+ 3 files changed, 262 insertions(+), 172 deletions(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index 94ccf99..dc7151c 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -930,7 +930,7 @@ static int vidioc_try_fmt_vid_overlay(struct file *file, void *priv,
+ 	struct v4l2_window *win = &f->fmt.win;
+ 	unsigned int width_align;
+ 
+-	width_align = ipu_pixelformat_is_planar(dev->fbuf.fmt.pixelformat) ?
++	width_align = ipu_pixelformat_is_planar(dev->fbuf_pixfmt->fourcc) ?
+ 		4 : 3;
+ 
+ 	v4l_bound_align_image(&win->w.width, MIN_W, MAX_W_IC,
+@@ -939,6 +939,9 @@ static int vidioc_try_fmt_vid_overlay(struct file *file, void *priv,
+ 
+ 	adjust_to_resizer_limits(dev, f, &dev->crop);
+ 
++	/* overlay is progressive only */
++	win->field = V4L2_FIELD_NONE;
++
+ 	return 0;
+ }
+ 
+@@ -1320,9 +1323,6 @@ static int vidioc_s_fbuf(struct file *file, void *priv,
+ 	struct mx6cam_dev *dev = ctx->dev;
+ 	struct mx6cam_pixfmt *fmt;
+ 
+-	if (fbuf->flags != V4L2_FBUF_FLAG_OVERLAY || !fbuf->base)
+-		return -EINVAL;
+-
+ 	fmt = mx6cam_get_format(fbuf->fmt.pixelformat, 0);
+ 	if (!fmt) {
+ 		v4l2_err(&dev->v4l2_dev,
+@@ -1334,7 +1334,6 @@ static int vidioc_s_fbuf(struct file *file, void *priv,
+ 	if (dev->preview_on)
+ 		stop_preview(dev);
+ 
+-	dev->fbuf = *fbuf;
+ 	dev->fbuf_pixfmt = fmt;
+ 
+ 	if (dev->preview_on)
+@@ -1349,7 +1348,15 @@ static int vidioc_g_fbuf(struct file *file, void *priv,
+ 	struct mx6cam_ctx *ctx = file2ctx(file);
+ 	struct mx6cam_dev *dev = ctx->dev;
+ 
+-	*fbuf = dev->fbuf;
++	fbuf->capability = V4L2_FBUF_CAP_EXTERNOVERLAY;
++	fbuf->flags = 0;
++
++	fbuf->fmt.width = dev->win.w.width;
++	fbuf->fmt.height = dev->win.w.height;
++	fbuf->fmt.pixelformat = dev->fbuf_pixfmt->fourcc;
++	fbuf->fmt.field = dev->win.field;
++	fbuf->fmt.bytesperline = (fbuf->fmt.width * dev->fbuf_pixfmt->bpp) >> 3;
++	fbuf->fmt.sizeimage = fbuf->fmt.height * fbuf->fmt.bytesperline;
+ 
+ 	return 0;
+ }
+@@ -1479,6 +1486,8 @@ static int vidioc_overlay(struct file *file, void *priv,
+ 	struct mx6cam_dev *dev = ctx->dev;
+ 	int ret = 0;
+ 
++	if (!dev->plane_ipu_dev)
++		return -ENODEV;
+ 	if (!is_io_ctx(ctx))
+ 		return -EBUSY;
+ 
+@@ -2149,52 +2158,113 @@ static int of_dev_node_match(struct device *dev, void *data)
+ }
+ 
+ static struct ipu_soc *mx6cam_get_ipu(struct mx6cam_dev *dev,
+-				      struct device_node *node)
++				      struct device_node *np,
++				      struct device **ipu_dev)
+ {
+-	struct device_node *ipu_node;
+-	struct device *ipu_dev;
++	struct device *idev;
+ 	struct ipu_soc *ipu;
+ 
+-	ipu_node = of_parse_phandle(node, "ipu", 0);
+-	if (!ipu_node) {
+-		v4l2_err(&dev->v4l2_dev, "missing ipu phandle!\n");
+-		return ERR_PTR(-EINVAL);
+-	}
+-
+-	ipu_dev = bus_find_device(&platform_bus_type, NULL,
+-				  ipu_node, of_dev_node_match);
+-	of_node_put(ipu_node);
+-
+-	if (!ipu_dev) {
++	idev = bus_find_device(&platform_bus_type, NULL, np,
++			       of_dev_node_match);
++	if (!idev) {
+ 		v4l2_err(&dev->v4l2_dev, "failed to find ipu device!\n");
+ 		return ERR_PTR(-ENODEV);
+ 	}
+ 
+-	device_lock(ipu_dev);
++	device_lock(idev);
+ 
+-	if (!ipu_dev->driver || !try_module_get(ipu_dev->driver->owner)) {
++	if (!idev->driver || !try_module_get(idev->driver->owner)) {
+ 		ipu = ERR_PTR(-EPROBE_DEFER);
+ 		v4l2_warn(&dev->v4l2_dev, "IPU driver not loaded\n");
+-		device_unlock(ipu_dev);
++		device_unlock(idev);
+ 		goto dev_put;
+ 	}
+ 
+-	dev->ipu_dev = ipu_dev;
+-	ipu = dev_get_drvdata(ipu_dev);
++	*ipu_dev = idev;
++	ipu = dev_get_drvdata(idev);
+ 
+-	device_unlock(ipu_dev);
++	device_unlock(idev);
+ 	return ipu;
+ dev_put:
+-	put_device(ipu_dev);
++	put_device(idev);
+ 	return ipu;
+ }
+ 
+-static void mx6cam_put_ipu(struct mx6cam_dev *dev)
++static void mx6cam_put_ipu(struct mx6cam_dev *dev, struct device **ipu_dev)
+ {
+-	if (!IS_ERR_OR_NULL(dev->ipu_dev)) {
+-		module_put(dev->ipu_dev->driver->owner);
+-		put_device(dev->ipu_dev);
++	struct device *idev = *ipu_dev;
++
++	if (!IS_ERR_OR_NULL(idev)) {
++		module_put(idev->driver->owner);
++		put_device(idev);
++		*ipu_dev = NULL;
++	}
++}
++
++static int of_parse_mx6cam(struct mx6cam_dev *dev, struct device_node *np)
++{
++	struct device_node *plane_ipu_np;
++	struct device_node *plane_np;
++	struct device_node *ipu_np;
++	u32 pipe;
++	int ret;
++
++	/* get our IPU */
++	ipu_np = of_parse_phandle(np, "ipu", 0);
++	if (!ipu_np) {
++		v4l2_err(&dev->v4l2_dev, "missing ipu phandle!\n");
++		return -EINVAL;
++	}
++
++	dev->ipu = mx6cam_get_ipu(dev, ipu_np, &dev->ipu_dev);
++	of_node_put(ipu_np);
++	if (IS_ERR(dev->ipu)) {
++		v4l2_err(&dev->v4l2_dev, "could not get ipu\n");
++		return PTR_ERR(dev->ipu);
++	}
++
++	plane_np = of_parse_phandle(np, "preview-plane", 0);
++	if (!plane_np) {
++		v4l2_info(&dev->v4l2_dev,
++			  "no preview plane defined, preview is disabled\n");
++		return 0;
++	}
++
++	/* get plane's IPU */
++	plane_ipu_np = of_get_parent(plane_np);
++	if (!plane_ipu_np) {
++		v4l2_err(&dev->v4l2_dev, "plane parent not found!\n");
++		of_node_put(plane_np);
++		ret = -ENODEV;
++		goto err_put_ipu;
+ 	}
++
++	dev->plane_ipu = mx6cam_get_ipu(dev, plane_ipu_np,
++					&dev->plane_ipu_dev);
++	of_node_put(plane_ipu_np);
++	if (IS_ERR(dev->plane_ipu)) {
++		v4l2_err(&dev->v4l2_dev, "could not get plane ipu\n");
++		of_node_put(plane_np);
++		ret = PTR_ERR(dev->plane_ipu);
++		goto err_put_ipu;
++	}
++
++	ret = of_property_read_u32(plane_np, "reg", &pipe);
++	of_node_put(plane_np);
++	if (ret) {
++		v4l2_err(&dev->v4l2_dev, "plane reg id missing!\n");
++		goto err_put_plane_ipu;
++	}
++
++	dev->plane_pipe = pipe;
++
++	return 0;
++
++err_put_plane_ipu:
++	mx6cam_put_ipu(dev, &dev->plane_ipu_dev);
++err_put_ipu:
++	mx6cam_put_ipu(dev, &dev->ipu_dev);
++	return ret;
+ }
+ 
+ static int mx6cam_probe(struct platform_device *pdev)
+@@ -2227,11 +2297,10 @@ static int mx6cam_probe(struct platform_device *pdev)
+ 	}
+ 	dev->pdata = pdata;
+ 
+-	/* get our IPU */
+-	dev->ipu = mx6cam_get_ipu(dev, node);
+-	if (IS_ERR(dev->ipu)) {
+-		v4l2_err(&dev->v4l2_dev, "could not get ipu\n");
+-		ret = PTR_ERR(dev->ipu);
++	ret = of_parse_mx6cam(dev, node);
++	if (ret) {
++		v4l2_err(&dev->v4l2_dev, "of_parse mx6cam failed with %d\n",
++			 ret);
+ 		goto unreg_dev;
+ 	}
+ 
+@@ -2274,6 +2343,16 @@ static int mx6cam_probe(struct platform_device *pdev)
+ 		mx6cam_get_format(dev->user_fmt.fmt.pix.pixelformat, 0);
+ 	dev->current_std = V4L2_STD_ALL;
+ 
++	/*
++	 * default preview overlay is 640x480 RGB565 at [0,0] relative
++	 * to output video signal.
++	 */
++	dev->win.w.width = 640;
++	dev->win.w.height = 480;
++	dev->win.w.left = dev->win.w.top = 0;
++	dev->win.field = V4L2_FIELD_NONE;
++	dev->fbuf_pixfmt = &mx6cam_pixformats[0]; /* RGB565 */
++
+ 	/* init our controls */
+ 	ret = mx6cam_init_controls(dev);
+ 	if (ret) {
+@@ -2370,7 +2449,8 @@ free_ctrls:
+ unreg_vdev:
+ 	video_unregister_device(dev->vfd);
+ put_ipu:
+-	mx6cam_put_ipu(dev);
++	mx6cam_put_ipu(dev, &dev->plane_ipu_dev);
++	mx6cam_put_ipu(dev, &dev->ipu_dev);
+ unreg_dev:
+ 	v4l2_device_unregister(&dev->v4l2_dev);
+ 	return ret;
+@@ -2382,7 +2462,8 @@ static int mx6cam_remove(struct platform_device *pdev)
+ 		(struct mx6cam_dev *)platform_get_drvdata(pdev);
+ 
+ 	v4l2_info(&dev->v4l2_dev, "Removing " DEVICE_NAME "\n");
+-	mx6cam_put_ipu(dev);
++	mx6cam_put_ipu(dev, &dev->plane_ipu_dev);
++	mx6cam_put_ipu(dev, &dev->ipu_dev);
+ 	v4l2_ctrl_handler_free(&dev->ctrl_hdlr);
+ 	video_unregister_device(dev->vfd);
+ 	mx6cam_unregister_subdevs(dev);
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.h b/drivers/staging/media/imx6/capture/mx6-camif.h
+index 3b5da9d..1ddd5ee 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.h
++++ b/drivers/staging/media/imx6/capture/mx6-camif.h
+@@ -136,11 +136,7 @@ struct mx6cam_dev {
+ 	 */
+ 	struct v4l2_window      win;
+ 
+-	/*
+-	 * info about the overlay framebuffer for preview (base address,
+-	 * width/height, pix format).
+-	 */
+-	struct v4l2_framebuffer fbuf;
++	/* pixel format of the overlay framebuffer for preview */
+ 	struct mx6cam_pixfmt    *fbuf_pixfmt;
+ 
+ 	/*
+@@ -185,6 +181,11 @@ struct mx6cam_dev {
+ 
+ 	struct device           *ipu_dev;
+ 	struct ipu_soc          *ipu;
++
++	/* the plane's IPU */
++	struct device           *plane_ipu_dev;
++	struct ipu_soc          *plane_ipu;
++	int                      plane_pipe;
+ };
+ 
+ struct mx6cam_ctx {
+diff --git a/drivers/staging/media/imx6/capture/mx6-preview.c b/drivers/staging/media/imx6/capture/mx6-preview.c
+index 2df4802..de6e277 100644
+--- a/drivers/staging/media/imx6/capture/mx6-preview.c
++++ b/drivers/staging/media/imx6/capture/mx6-preview.c
+@@ -24,31 +24,30 @@
+ #include <media/v4l2-subdev.h>
+ #include <media/v4l2-of.h>
+ #include <media/v4l2-ctrls.h>
++#include <video/videomode.h>
+ #include <video/imx-ipu-v3.h>
+ #include <media/imx6.h>
+ #include "mx6-camif.h"
+ 
+-struct preview_framebuffer {
+-	struct dma_buf            *dbuf;
+-	struct dma_buf_attachment *attach;
+-	struct sg_table           *sgt;
+-	dma_addr_t                phys;
+-};
+-
+ struct preview_priv {
+ 	struct mx6cam_dev    *dev;
+ 	struct v4l2_subdev    sd;
+ 	struct v4l2_ctrl_handler ctrl_hdlr;
+ 
+-	struct preview_framebuffer fbuf;
++	/* the overlay framebuffer */
++	struct ipu_framebuffer ipufb;
++	/* the actual overlay frame dma buffer */
++	struct mx6cam_dma_buf  fbuf;
+ 
+ 	struct ipuv3_channel *preview_ch;
+ 	struct ipuv3_channel *preview_rot_in_ch;
+ 	struct ipuv3_channel *preview_rot_out_ch;
+ 	struct ipu_ic *ic_vf;
++	/* the IPU display overlay plane handle */
++	struct ipu_plane     *plane;
+ 
+-	struct v4l2_mbus_framefmt inf; /* input sensor format */
+-	struct v4l2_pix_format outf;   /* output user format */
++	struct ipu_image inf;          /* input sensor format */
++	struct ipu_image outf;         /* overlay format */
+ 	enum ipu_color_space in_cs;    /* input colorspace */
+ 	enum ipu_color_space out_cs;   /* output colorspace */
+ 
+@@ -71,12 +70,76 @@ struct preview_priv {
+ 	struct completion last_eof_comp;
+ };
+ 
++static int preview_enable_display(struct preview_priv *priv)
++{
++	struct ipu_image *outf = &priv->outf;
++	struct videomode vm;
++	int ret;
++
++	/* retrieve the current background videomode */
++	ret = ipu_plane_mode_get(priv->plane, &vm);
++	if (ret) {
++		v4l2_err(&priv->sd, "failed to get current video mode\n");
++		return ret;
++	}
++
++	ret = ipu_plane_mode_set(priv->plane, &vm, &priv->ipufb,
++				 outf->rect.left, outf->rect.top,
++				 outf->pix.width, outf->pix.height,
++				 0, 0, outf->pix.width, outf->pix.height);
++	if (ret) {
++		v4l2_err(&priv->sd, "failed to set overlay video mode\n");
++		return ret;
++	}
++
++	ipu_plane_enable(priv->plane);
++
++	return 0;
++}
++
++static void preview_free_dma_buf(struct preview_priv *priv,
++				 struct mx6cam_dma_buf *buf)
++{
++	struct mx6cam_dev *dev = priv->dev;
++
++	if (buf->virt)
++		dma_free_coherent(dev->dev, buf->len, buf->virt, buf->phys);
++
++	buf->virt = NULL;
++	buf->phys = 0;
++}
++
++static int preview_alloc_dma_buf(struct preview_priv *priv,
++				 struct mx6cam_dma_buf *buf,
++				 int size)
++{
++	struct mx6cam_dev *dev = priv->dev;
++
++	preview_free_dma_buf(priv, buf);
++
++	buf->len = PAGE_ALIGN(size);
++	buf->virt = dma_alloc_coherent(dev->dev, buf->len, &buf->phys,
++				       GFP_DMA | GFP_KERNEL | __GFP_NOINIT);
++	if (!buf->virt) {
++		v4l2_err(&priv->sd, "failed to alloc dma buffer\n");
++		return -ENOMEM;
++	}
++
++	return 0;
++}
++
+ static void preview_put_ipu_resources(struct preview_priv *priv)
+ {
+ 	if (!IS_ERR_OR_NULL(priv->ic_vf))
+ 		ipu_ic_put(priv->ic_vf);
+ 	priv->ic_vf = NULL;
+ 
++	preview_free_dma_buf(priv, &priv->fbuf);
++
++	if (!IS_ERR_OR_NULL(priv->plane))
++		ipu_plane_put(priv->plane);
++	priv->plane = NULL;
++
+ 	if (!IS_ERR_OR_NULL(priv->preview_ch))
+ 		ipu_idmac_put(priv->preview_ch);
+ 	priv->preview_ch = NULL;
+@@ -92,9 +155,28 @@ static void preview_put_ipu_resources(struct preview_priv *priv)
+ 
+ static int preview_get_ipu_resources(struct preview_priv *priv)
+ {
++	struct ipu_image *outf = &priv->outf;
+ 	struct mx6cam_dev *dev = priv->dev;
+ 	int err;
+ 
++	priv->plane = ipu_plane_get(dev->plane_ipu, dev->plane_pipe,
++				    0, NULL, NULL);
++	if (IS_ERR(priv->plane)) {
++		v4l2_err(&priv->sd, "could not get IPU plane\n");
++		err = PTR_ERR(priv->plane);
++		goto out;
++	}
++
++	err = preview_alloc_dma_buf(priv, &priv->fbuf,
++				    outf->pix.sizeimage);
++	if (err)
++		goto out;
++
++	/* now that we have the fbuf physaddr's we can fill the ipufb */
++	ipu_image_to_ipu_framebuffer(outf, &priv->ipufb);
++	/* now set physaddr */
++	priv->ipufb.paddr = priv->fbuf.phys;
++
+ 	priv->ic_vf = ipu_ic_get(dev->ipu, IC_TASK_VIEWFINDER);
+ 	if (IS_ERR(priv->ic_vf)) {
+ 		v4l2_err(&priv->sd, "failed to get IC VF\n");
+@@ -198,54 +280,25 @@ static void preview_eof_timeout(unsigned long data)
+ 	v4l2_subdev_notify(&priv->sd, MX6CAM_EOF_TIMEOUT_NOTIFY, NULL);
+ }
+ 
+-static void preview_free_dma_buf(struct preview_priv *priv,
+-				 struct mx6cam_dma_buf *buf)
+-{
+-	struct mx6cam_dev *dev = priv->dev;
+-
+-	if (buf->virt)
+-		dma_free_coherent(dev->dev, buf->len, buf->virt, buf->phys);
+-
+-	buf->virt = NULL;
+-	buf->phys = 0;
+-}
+-
+-static int preview_alloc_dma_buf(struct preview_priv *priv,
+-				 struct mx6cam_dma_buf *buf,
+-				 int size)
+-{
+-	struct mx6cam_dev *dev = priv->dev;
+-
+-	preview_free_dma_buf(priv, buf);
+-
+-	buf->len = PAGE_ALIGN(size);
+-	buf->virt = dma_alloc_coherent(dev->dev, buf->len, &buf->phys,
+-				       GFP_DMA | GFP_KERNEL);
+-	if (!buf->virt) {
+-		v4l2_err(&priv->sd, "failed to alloc dma buffer\n");
+-		return -ENOMEM;
+-	}
+-
+-	return 0;
+-}
+-
+ static void preview_setup_channel(struct preview_priv *priv,
+ 				  struct ipuv3_channel *channel,
+ 				  enum ipu_rotate_mode rot_mode,
+ 				  dma_addr_t addr0, dma_addr_t addr1,
+ 				  bool rot_swap_width_height)
+ {
++	struct ipu_image *outf = &priv->outf;
++	struct ipu_image *inf = &priv->inf;
+ 	struct mx6cam_dev *dev = priv->dev;
+ 	unsigned int burst_size;
+ 	u32 width, height, stride;
+ 	struct ipu_image image;
+ 
+ 	if (rot_swap_width_height) {
+-		width = priv->outf.height;
+-		height = priv->outf.width;
++		width = outf->pix.height;
++		height = outf->pix.width;
+ 	} else {
+-		width = priv->outf.width;
+-		height = priv->outf.height;
++		width = outf->pix.width;
++		height = outf->pix.height;
+ 	}
+ 	stride = dev->fbuf_pixfmt->y_depth ?
+ 		(width * dev->fbuf_pixfmt->y_depth) >> 3 :
+@@ -257,7 +310,7 @@ static void preview_setup_channel(struct preview_priv *priv,
+ 	image.pix.width = image.rect.width = width;
+ 	image.pix.height = image.rect.height = height;
+ 	image.pix.bytesperline = stride;
+-	image.pix.pixelformat = priv->outf.pixelformat;
++	image.pix.pixelformat = outf->pix.pixelformat;
+ 	image.phys0 = addr0;
+ 	image.phys1 = addr1;
+ 	ipu_cpmem_set_image(channel, &image);
+@@ -274,7 +327,7 @@ static void preview_setup_channel(struct preview_priv *priv,
+ 
+ 	ipu_cpmem_set_burstsize(channel, burst_size);
+ 
+-	if (V4L2_FIELD_HAS_BOTH(priv->inf.field) && channel == priv->preview_ch)
++	if (V4L2_FIELD_HAS_BOTH(inf->pix.field) && channel == priv->preview_ch)
+ 		ipu_cpmem_interlaced_scan(channel, stride);
+ 
+ 	ipu_ic_task_idma_init(priv->ic_vf, channel, width, height,
+@@ -285,27 +338,28 @@ static void preview_setup_channel(struct preview_priv *priv,
+ 	ipu_idmac_set_double_buffer(channel, true);
+ }
+ 
+-static int preview_setup_rotation(struct preview_priv *priv,
+-				  dma_addr_t phys0, dma_addr_t phys1)
++static int preview_setup_rotation(struct preview_priv *priv)
+ {
++	struct ipu_image *outf = &priv->outf;
++	struct ipu_image *inf = &priv->inf;
+ 	int err;
+ 
+ 	err = preview_alloc_dma_buf(priv, &priv->rot_buf[0],
+-				    priv->outf.sizeimage);
++				    outf->pix.sizeimage);
+ 	if (err) {
+ 		v4l2_err(&priv->sd, "failed to alloc rot_buf[0], %d\n", err);
+ 		return err;
+ 	}
+ 	err = preview_alloc_dma_buf(priv, &priv->rot_buf[1],
+-				    priv->outf.sizeimage);
++				    outf->pix.sizeimage);
+ 	if (err) {
+ 		v4l2_err(&priv->sd, "failed to alloc rot_buf[1], %d\n", err);
+ 		goto free_rot0;
+ 	}
+ 
+ 	err = ipu_ic_task_init(priv->ic_vf,
+-			       priv->inf.width, priv->inf.height,
+-			       priv->outf.height, priv->outf.width,
++			       inf->pix.width, inf->pix.height,
++			       outf->pix.height, outf->pix.width,
+ 			       priv->in_cs, priv->out_cs);
+ 	if (err) {
+ 		v4l2_err(&priv->sd, "ipu_ic_task_init failed, %d\n", err);
+@@ -329,7 +383,8 @@ static int preview_setup_rotation(struct preview_priv *priv,
+ 	/* init the destination IC PREVIEW ROT-->MEM IDMAC channel */
+ 	preview_setup_channel(priv, priv->preview_rot_out_ch,
+ 			      IPU_ROTATE_NONE,
+-			      phys0, phys1,
++			      priv->fbuf.phys,
++			      priv->fbuf.phys,
+ 			      false);
+ 
+ 	/* now link IC PREVIEW-->MEM to MEM-->IC PREVIEW ROT */
+@@ -361,14 +416,15 @@ free_rot0:
+ 	return err;
+ }
+ 
+-static int preview_setup_norotation(struct preview_priv *priv,
+-				    dma_addr_t phys0, dma_addr_t phys1)
++static int preview_setup_norotation(struct preview_priv *priv)
+ {
++	struct ipu_image *outf = &priv->outf;
++	struct ipu_image *inf = &priv->inf;
+ 	int err;
+ 
+ 	err = ipu_ic_task_init(priv->ic_vf,
+-			       priv->inf.width, priv->inf.height,
+-			       priv->outf.width, priv->outf.height,
++			       inf->pix.width, inf->pix.height,
++			       outf->pix.width, outf->pix.height,
+ 			       priv->in_cs, priv->out_cs);
+ 	if (err) {
+ 		v4l2_err(&priv->sd, "ipu_ic_task_init failed, %d\n", err);
+@@ -377,7 +433,8 @@ static int preview_setup_norotation(struct preview_priv *priv,
+ 
+ 	/* init the IC PREVIEW-->MEM IDMAC channel */
+ 	preview_setup_channel(priv, priv->preview_ch, priv->rot_mode,
+-			      phys0, phys1, false);
++			      priv->fbuf.phys, priv->fbuf.phys,
++			      false);
+ 
+ 	ipu_ic_enable(priv->ic_vf);
+ 
+@@ -394,56 +451,12 @@ static int preview_setup_norotation(struct preview_priv *priv,
+ 	return 0;
+ }
+ 
+-static void unmap_fbuf(struct preview_priv *priv)
+-{
+-	if (!priv->fbuf.phys)
+-		return;
+-
+-	dma_buf_unmap_attachment(priv->fbuf.attach, priv->fbuf.sgt,
+-				 DMA_TO_DEVICE);
+-	dma_buf_detach(priv->fbuf.dbuf, priv->fbuf.attach);
+-	dma_buf_put(priv->fbuf.dbuf);
+-	priv->fbuf.phys = 0;
+-}
+-
+-static int map_fbuf(struct preview_priv *priv)
+-{
+-	struct mx6cam_dev *dev = priv->dev;
+-
+-	unmap_fbuf(priv);
+-
+-	priv->fbuf.dbuf = dma_buf_get((int)dev->fbuf.base);
+-	if (IS_ERR_OR_NULL(priv->fbuf.dbuf)) {
+-		v4l2_err(&priv->sd, "invalid dmabuf fd\n");
+-		return -EINVAL;
+-	}
+-
+-	priv->fbuf.attach = dma_buf_attach(priv->fbuf.dbuf, dev->dev);
+-	if (IS_ERR(priv->fbuf.attach)) {
+-		v4l2_err(&priv->sd, "failed to attach dmabuf\n");
+-		dma_buf_put(priv->fbuf.dbuf);
+-		return PTR_ERR(priv->fbuf.attach);
+-	}
+-
+-	priv->fbuf.sgt = dma_buf_map_attachment(priv->fbuf.attach,
+-						DMA_TO_DEVICE);
+-	if (IS_ERR(priv->fbuf.sgt)) {
+-		v4l2_err(&priv->sd, "failed to map dmabuf\n");
+-		dma_buf_detach(priv->fbuf.dbuf, priv->fbuf.attach);
+-		dma_buf_put(priv->fbuf.dbuf);
+-		return PTR_ERR(priv->fbuf.sgt);
+-	}
+-
+-	priv->fbuf.phys = sg_dma_address(priv->fbuf.sgt->sgl);
+-
+-	return 0;
+-}
+-
+ static int preview_start(struct preview_priv *priv)
+ {
++	struct ipu_image *outf = &priv->outf;
++	struct ipu_image *inf = &priv->inf;
+ 	struct mx6cam_dev *dev = priv->dev;
+ 	int csi_id = dev->ep->ep.base.port;
+-	dma_addr_t fb_buf;
+ 	int err = 0;
+ 
+ 	if (priv->preview_active) {
+@@ -451,28 +464,27 @@ static int preview_start(struct preview_priv *priv)
+ 		return 0;
+ 	}
+ 
+-	err = map_fbuf(priv);
+-	if (err)
+-		return err;
++	inf->pix.width = dev->crop.width;
++	inf->pix.height = dev->crop.height;
++	inf->pix.field = dev->sensor_fmt.field;
++	inf->pix.pixelformat = ipu_mbus_code_to_fourcc(dev->sensor_fmt.code);
++	priv->in_cs = ipu_pixelformat_to_colorspace(inf->pix.pixelformat);
++
++	outf->pix.width = dev->win.w.width;
++	outf->pix.height = dev->win.w.height;
++	outf->rect = dev->win.w;
++	outf->pix.pixelformat = dev->fbuf_pixfmt->fourcc;
++	outf->pix.sizeimage = (outf->pix.width * outf->pix.height *
++			       dev->fbuf_pixfmt->bpp) >> 3;
++	priv->out_cs = ipu_pixelformat_to_colorspace(outf->pix.pixelformat);
+ 
+ 	err = preview_get_ipu_resources(priv);
+ 	if (err)
+-		goto out_unmap_fbuf;
+-
+-	priv->inf = dev->sensor_fmt;
+-	priv->inf.width = dev->crop.width;
+-	priv->inf.height = dev->crop.height;
+-	priv->in_cs = ipu_mbus_code_to_colorspace(priv->inf.code);
+-
+-	priv->outf.width = dev->win.w.width;
+-	priv->outf.height = dev->win.w.height;
+-	priv->outf.pixelformat = dev->fbuf.fmt.pixelformat;
+-	priv->outf.sizeimage =
+-		(priv->outf.width * priv->outf.height *
+-		 dev->fbuf_pixfmt->bpp) >> 3;
+-	priv->out_cs = ipu_pixelformat_to_colorspace(priv->outf.pixelformat);
++		return err;
+ 
+-	fb_buf = priv->fbuf.phys;
++	err = preview_enable_display(priv);
++	if (err)
++		goto out_put_ipu;
+ 
+ 	priv->buf_num = 0;
+ 
+@@ -480,9 +492,9 @@ static int preview_start(struct preview_priv *priv)
+ 	ipu_ic_set_src(priv->ic_vf, csi_id, false);
+ 
+ 	if (priv->rot_mode >= IPU_ROTATE_90_RIGHT)
+-		err = preview_setup_rotation(priv, fb_buf, fb_buf);
++		err = preview_setup_rotation(priv);
+ 	else
+-		err = preview_setup_norotation(priv, fb_buf, fb_buf);
++		err = preview_setup_norotation(priv);
+ 	if (err)
+ 		goto out_put_ipu;
+ 
+@@ -537,8 +549,6 @@ out_free_nfb4eof_irq:
+ 	devm_free_irq(dev->dev, priv->nfb4eof_irq, priv);
+ out_put_ipu:
+ 	preview_put_ipu_resources(priv);
+-out_unmap_fbuf:
+-	unmap_fbuf(priv);
+ 	return err;
+ }
+ 
+@@ -591,8 +601,6 @@ static int preview_stop(struct preview_priv *priv)
+ 
+ 	preview_put_ipu_resources(priv);
+ 
+-	unmap_fbuf(priv);
+-
+ 	priv->preview_active = false;
+ 	return 0;
+ }
+-- 
+2.4.10
+

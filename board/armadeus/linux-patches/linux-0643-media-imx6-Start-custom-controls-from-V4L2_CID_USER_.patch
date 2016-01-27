@@ -1,0 +1,35 @@
+From 35f0b4d5680f0a803512ffec79fdbe8a37b426f1 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Tue, 9 Jun 2015 16:39:54 -0700
+Subject: [PATCH 643/668] media: imx6: Start custom controls from
+ V4L2_CID_USER_IMX6_BASE
+
+We can't start our custom controls from V4L2_CID_USER_BASE + 0x1000,
+those values have already been reserved by another media driver. Use
+the new block of control IDs reserved for imx6 at V4L2_CID_USER_IMX6_BASE.
+This is a user ABI change and requires updates to any users of
+V4L2_CID_IMX6_MOTION.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ include/media/imx6.h | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/include/media/imx6.h b/include/media/imx6.h
+index b286840..6b62e16 100644
+--- a/include/media/imx6.h
++++ b/include/media/imx6.h
+@@ -10,7 +10,9 @@
+ #ifndef __MEDIA_IMX6_H__
+ #define __MEDIA_IMX6_H__
+ 
+-#define V4L2_CID_IMX6_MOTION   (V4L2_CID_USER_BASE + 0x1000)
++enum imx6_ctrl_id {
++	V4L2_CID_IMX6_MOTION = (V4L2_CID_USER_IMX6_BASE + 0),
++};
+ 
+ /*
+  * Analog decoder status change notifications
+-- 
+2.4.10
+

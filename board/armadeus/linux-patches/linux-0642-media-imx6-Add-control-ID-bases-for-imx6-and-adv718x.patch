@@ -1,0 +1,36 @@
+From c3d3dd528e1f941b27f66115a6551785a75688fe Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Mon, 15 Jun 2015 15:58:21 -0700
+Subject: [PATCH 642/668] media: imx6: Add control ID bases for imx6 and
+ adv718x
+
+Add the V4L2 control ID bases for imx6 media drivers and
+adv718x sensor drivers.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ include/uapi/linux/v4l2-controls.h | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/include/uapi/linux/v4l2-controls.h b/include/uapi/linux/v4l2-controls.h
+index d448c53..72db32b 100644
+--- a/include/uapi/linux/v4l2-controls.h
++++ b/include/uapi/linux/v4l2-controls.h
+@@ -178,6 +178,14 @@ enum v4l2_colorfx {
+  * We reserve 16 controls for this driver. */
+ #define V4L2_CID_USER_TC358743_BASE		(V4L2_CID_USER_BASE + 0x1080)
+ 
++/* The base for the imx6 driver controls.
++ * We reserve 16 controls for this driver. */
++#define V4L2_CID_USER_IMX6_BASE			(V4L2_CID_USER_BASE + 0x1090)
++
++/* The base for the ADV718x sensor controls.
++ * We reserve 32 controls for this driver. */
++#define V4L2_CID_USER_ADV718X_BASE		(V4L2_CID_USER_BASE + 0x10a0)
++
+ /* MPEG-class control IDs */
+ /* The MPEG controls are applicable to all codec controls
+  * and the 'MPEG' part of the define is historical */
+-- 
+2.4.10
+

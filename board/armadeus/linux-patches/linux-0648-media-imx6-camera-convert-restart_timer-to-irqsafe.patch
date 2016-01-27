@@ -1,0 +1,30 @@
+From aea80eb5a1b09960d2ac273dea2dd65153db6a13 Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Mon, 10 Aug 2015 17:28:53 -0700
+Subject: [PATCH 648/668] media: imx6 camera: convert restart_timer to irqsafe
+
+The restart_timer must be an irqsafe timer because we are calling
+del_timer_sync() on it inside mx6cam_subdev_notification(), which
+is called by the subdev's from an interrupt context.
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index 59ab6ee..b2af99b 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -1393,7 +1393,7 @@ static int vidioc_reqbufs(struct file *file, void *priv,
+ 	INIT_LIST_HEAD(&ctx->ready_q);
+ 	INIT_WORK(&ctx->restart_work, restart_work_handler);
+ 	INIT_WORK(&ctx->stop_work, stop_work_handler);
+-	init_timer(&ctx->restart_timer);
++	__init_timer(&ctx->restart_timer, TIMER_IRQSAFE);
+ 	ctx->restart_timer.data = (unsigned long)ctx;
+ 	ctx->restart_timer.function = mx6cam_restart_timeout;
+ 
+-- 
+2.4.10
+

@@ -1,0 +1,122 @@
+From deaa63d7f30fcc56d16b28e87d6c3c72382d89bf Mon Sep 17 00:00:00 2001
+From: Steve Longerbeam <steve_longerbeam@mentor.com>
+Date: Thu, 14 May 2015 16:52:37 -0700
+Subject: [PATCH 641/668] media: imx6 camera: Add chromakey, global alpha
+ support for preview
+
+Now that the imx6 capture driver has direct control of ipu overlay
+display planes for camera preview, we can add support for setting
+chromakeys and global alpha via the standard V4L2 interfaces.
+
+According to V4L2, the chromakey must be in the same pixel format
+as the overlay framebuffer as negotiated via VIDIOC_S_FBUF. For now
+the capture driver only accepts RGB24 chromakeys. At some point the
+driver will need to assume the incoming format from userspace is the
+same as the framebuffer as required by V4L2 and will need to convert
+from that format to RGB24 before passing it to ipu_plane_set_colorkey().
+
+Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
+---
+ drivers/staging/media/imx6/capture/mx6-camif.c   | 19 ++++++++++++++++++-
+ drivers/staging/media/imx6/capture/mx6-camif.h   |  4 ++++
+ drivers/staging/media/imx6/capture/mx6-preview.c | 17 +++++++++++++++++
+ 3 files changed, 39 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.c b/drivers/staging/media/imx6/capture/mx6-camif.c
+index dc7151c..59ab6ee 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.c
++++ b/drivers/staging/media/imx6/capture/mx6-camif.c
+@@ -1336,6 +1336,11 @@ static int vidioc_s_fbuf(struct file *file, void *priv,
+ 
+ 	dev->fbuf_pixfmt = fmt;
+ 
++	dev->global_alpha_enable =
++		(fbuf->flags & V4L2_FBUF_FLAG_GLOBAL_ALPHA) != 0;
++	dev->chromakey_enable =
++		(fbuf->flags & V4L2_FBUF_FLAG_SRC_CHROMAKEY) != 0;
++
+ 	if (dev->preview_on)
+ 		start_preview(dev);
+ 
+@@ -1348,8 +1353,15 @@ static int vidioc_g_fbuf(struct file *file, void *priv,
+ 	struct mx6cam_ctx *ctx = file2ctx(file);
+ 	struct mx6cam_dev *dev = ctx->dev;
+ 
+-	fbuf->capability = V4L2_FBUF_CAP_EXTERNOVERLAY;
++	fbuf->capability = V4L2_FBUF_CAP_EXTERNOVERLAY |
++		V4L2_FBUF_CAP_SRC_CHROMAKEY |
++		V4L2_FBUF_CAP_GLOBAL_ALPHA;
++
+ 	fbuf->flags = 0;
++	if (dev->global_alpha_enable)
++		fbuf->flags |= V4L2_FBUF_FLAG_GLOBAL_ALPHA;
++	if (dev->chromakey_enable)
++		fbuf->flags |= V4L2_FBUF_FLAG_SRC_CHROMAKEY;
+ 
+ 	fbuf->fmt.width = dev->win.w.width;
+ 	fbuf->fmt.height = dev->win.w.height;
+@@ -2353,6 +2365,11 @@ static int mx6cam_probe(struct platform_device *pdev)
+ 	dev->win.field = V4L2_FIELD_NONE;
+ 	dev->fbuf_pixfmt = &mx6cam_pixformats[0]; /* RGB565 */
+ 
++	dev->global_alpha_enable = false;
++	dev->win.global_alpha    = 255;
++	dev->chromakey_enable    = false;
++	dev->win.chromakey       = 0;
++
+ 	/* init our controls */
+ 	ret = mx6cam_init_controls(dev);
+ 	if (ret) {
+diff --git a/drivers/staging/media/imx6/capture/mx6-camif.h b/drivers/staging/media/imx6/capture/mx6-camif.h
+index 1ddd5ee..4fd73fe 100644
+--- a/drivers/staging/media/imx6/capture/mx6-camif.h
++++ b/drivers/staging/media/imx6/capture/mx6-camif.h
+@@ -123,6 +123,10 @@ struct mx6cam_dev {
+ 	/* derived from rotation, hflip, vflip controls */
+ 	enum ipu_rotate_mode     rot_mode;
+ 
++	/* for preview overlay */
++	bool                     global_alpha_enable;
++	bool                     chromakey_enable;
++
+ 	/* the format from sensor and from userland */
+ 	struct v4l2_format        user_fmt;
+ 	struct mx6cam_pixfmt      *user_pixfmt;
+diff --git a/drivers/staging/media/imx6/capture/mx6-preview.c b/drivers/staging/media/imx6/capture/mx6-preview.c
+index de6e277..5ef0864 100644
+--- a/drivers/staging/media/imx6/capture/mx6-preview.c
++++ b/drivers/staging/media/imx6/capture/mx6-preview.c
+@@ -72,6 +72,7 @@ struct preview_priv {
+ 
+ static int preview_enable_display(struct preview_priv *priv)
+ {
++	struct mx6cam_dev *dev = priv->dev;
+ 	struct ipu_image *outf = &priv->outf;
+ 	struct videomode vm;
+ 	int ret;
+@@ -83,6 +84,22 @@ static int preview_enable_display(struct preview_priv *priv)
+ 		return ret;
+ 	}
+ 
++	ret = ipu_plane_set_global_alpha(priv->plane, true,
++					 dev->global_alpha_enable ?
++					 dev->win.global_alpha : 255);
++	if (ret) {
++		v4l2_err(&priv->sd, "failed to set global alpha\n");
++		return ret;
++	}
++
++	ret = ipu_plane_set_colorkey(priv->plane,
++				     dev->chromakey_enable,
++				     dev->win.chromakey);
++	if (ret) {
++		v4l2_err(&priv->sd, "failed to set chromakey\n");
++		return ret;
++	}
++
+ 	ret = ipu_plane_mode_set(priv->plane, &vm, &priv->ipufb,
+ 				 outf->rect.left, outf->rect.top,
+ 				 outf->pix.width, outf->pix.height,
+-- 
+2.4.10
+
