@@ -39,10 +39,10 @@ Signed-off-by: Steve Longerbeam <steve_longerbeam@mentor.com>
  create mode 100644 drivers/staging/media/imx6/m2m/Makefile
  create mode 100644 drivers/staging/media/imx6/m2m/mx6-m2m.c
 
-diff --git a/Documentation/devicetree/bindings/media/imx6.txt b/Documentation/devicetree/bindings/media/imx6.txt
-index 06c9c6f..f871b52 100644
---- a/Documentation/devicetree/bindings/media/imx6.txt
-+++ b/Documentation/devicetree/bindings/media/imx6.txt
+Index: linux-4.4/Documentation/devicetree/bindings/media/imx6.txt
+===================================================================
+--- linux-4.4.orig/Documentation/devicetree/bindings/media/imx6.txt
++++ linux-4.4/Documentation/devicetree/bindings/media/imx6.txt
 @@ -1,4 +1,27 @@
 -Freescale i.MX6 Video Capture
 +Freescale i.MX6 Video Capture, Mem2Mem
@@ -70,12 +70,12 @@ index 06c9c6f..f871b52 100644
 +};
 +
  
- Video Capture node
- ------------------
-diff --git a/drivers/staging/media/imx6/Kconfig b/drivers/staging/media/imx6/Kconfig
-index 512a659..06862a68 100644
---- a/drivers/staging/media/imx6/Kconfig
-+++ b/drivers/staging/media/imx6/Kconfig
+ v4l2-capture node
+ -----------------
+Index: linux-4.4/drivers/staging/media/imx6/Kconfig
+===================================================================
+--- linux-4.4.orig/drivers/staging/media/imx6/Kconfig
++++ linux-4.4/drivers/staging/media/imx6/Kconfig
 @@ -23,3 +23,15 @@ config VIDEO_IMX6_CAMERA
  if VIDEO_IMX6_CAMERA
  source "drivers/staging/media/imx6/capture/Kconfig"
@@ -92,26 +92,24 @@ index 512a659..06862a68 100644
 +	  processing of buffers. Operations include scaling, rotation,
 +	  and color space conversion. The driver implements tiling to
 +	  support scaling up to 4096x4096.
-diff --git a/drivers/staging/media/imx6/Makefile b/drivers/staging/media/imx6/Makefile
-index e0ed058..f6e0093 100644
---- a/drivers/staging/media/imx6/Makefile
-+++ b/drivers/staging/media/imx6/Makefile
+Index: linux-4.4/drivers/staging/media/imx6/Makefile
+===================================================================
+--- linux-4.4.orig/drivers/staging/media/imx6/Makefile
++++ linux-4.4/drivers/staging/media/imx6/Makefile
 @@ -1 +1,2 @@
  obj-$(CONFIG_VIDEO_IMX6_CAMERA) += capture/
 +obj-$(CONFIG_VIDEO_IMX6_M2M) += m2m/
-diff --git a/drivers/staging/media/imx6/m2m/Makefile b/drivers/staging/media/imx6/m2m/Makefile
-new file mode 100644
-index 0000000..cf65bdb8
+Index: linux-4.4/drivers/staging/media/imx6/m2m/Makefile
+===================================================================
 --- /dev/null
-+++ b/drivers/staging/media/imx6/m2m/Makefile
++++ linux-4.4/drivers/staging/media/imx6/m2m/Makefile
 @@ -0,0 +1 @@
 +obj-$(CONFIG_VIDEO_IMX6_M2M) += mx6-m2m.o
-diff --git a/drivers/staging/media/imx6/m2m/mx6-m2m.c b/drivers/staging/media/imx6/m2m/mx6-m2m.c
-new file mode 100644
-index 0000000..a56f5cd
+Index: linux-4.4/drivers/staging/media/imx6/m2m/mx6-m2m.c
+===================================================================
 --- /dev/null
-+++ b/drivers/staging/media/imx6/m2m/mx6-m2m.c
-@@ -0,0 +1,1994 @@
++++ linux-4.4/drivers/staging/media/imx6/m2m/mx6-m2m.c
+@@ -0,0 +1,1995 @@
 +/*
 + * This is a mem2mem driver for the Freescale i.MX6 SOC. It carries out
 + * color-space conversion, downsizing, resizing, and rotation transformations
@@ -903,7 +901,7 @@ index 0000000..a56f5cd
 +static bool m2mx6_doirq(struct m2mx6_ctx *ctx)
 +{
 +	struct m2mx6_q_data *s_q_data, *d_q_data;
-+	struct vb2_buffer *src_vb, *dst_vb;
++	struct vb2_v4l2_buffer *src_vb, *dst_vb;
 +	struct ipuv3_channel *outch;
 +	struct m2mx6_seg_off *src_off, *dst_off;
 +
@@ -956,7 +954,7 @@ index 0000000..a56f5cd
 +				}
 +				v4l2_info(&ctx->dev->v4l2_dev,
 +					  "buf%d completed in %lu usec\n",
-+					  dst_vb->v4l2_buf.index,
++					  dst_vb->vb2_buf.index,
 +					  stop.tv_sec * 1000 * 1000 +
 +					  stop.tv_usec);
 +			}
@@ -1706,7 +1704,7 @@ index 0000000..a56f5cd
 + */
 +
 +static int m2mx6_queue_setup(struct vb2_queue *vq,
-+				const struct v4l2_format *fmt,
++				const void *parg,
 +				unsigned int *nbuffers, unsigned int *nplanes,
 +				unsigned int sizes[], void *alloc_ctxs[])
 +{
@@ -1754,7 +1752,8 @@ index 0000000..a56f5cd
 +static void m2mx6_buf_queue(struct vb2_buffer *vb)
 +{
 +	struct m2mx6_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
-+	v4l2_m2m_buf_queue(ctx->m2m_ctx, vb);
++	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
++	v4l2_m2m_buf_queue(ctx->m2m_ctx, vbuf);
 +}
 +
 +static void m2mx6_wait_prepare(struct vb2_queue *q)
@@ -2106,6 +2105,3 @@ index 0000000..a56f5cd
 +};
 +
 +module_platform_driver(m2mx6_pdrv);
--- 
-2.4.10
-
