@@ -65,7 +65,7 @@ if [ -f "$1/rootfs.ext4" ]; then
 fi
 
 # generate full HD/MMC image if config file found
-GENIMAGE_CFG="${BR2_EXTERNAL}/board/armadeus/$2/genimage.cfg"
+GENIMAGE_CFG="${BR2_EXTERNAL_ARMADEUS_PATH}/board/armadeus/$2/genimage.cfg"
 GENIMAGE_TMP="${BUILD_DIR}/genimage.tmp"
 echo $GENIMAGE_CFG $GENIMAGE_TMP
 rm -rf "${GENIMAGE_TMP}"
